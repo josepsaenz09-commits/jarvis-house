@@ -1,21 +1,127 @@
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 from openai import OpenAI
-import anthropic
 
 app = Flask(__name__)
 
-openai_client = OpenAI(
+client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY")
 )
 
-anthropic_client = anthropic.Anthropic(
-    api_key=os.environ.get("ANTHROPIC_API_KEY")
-)
+HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS</title>
+    <style>
+        body {
+            background: #050b12;
+            color: #00d9ff;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 30px;
+        }
+
+        h1 {
+            font-size: 42px;
+            margin-bottom: 5px;
+        }
+
+        #status {
+            color: #00ff88;
+            margin-bottom: 30px;
+        }
+
+        #chat {
+            max-width: 700px;
+            margin: auto;
+            text-align: left;
+        }
+
+        .message {
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 10px;
+            background: #101c28;
+        }
+
+        input {
+            width: 70%;
+            padding: 14px;
+            border-radius: 8px;
+            border: 1px solid #00d9ff;
+            background: #08121c;
+            color: white;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 14px 20px;
+            margin-left: 5px;
+            border: none;
+            border-radius: 8px;
+            background: #00d9ff;
+            color: #001018;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>JARVIS</h1>
+    <div id="status">● JARVIS está en línea</div>
+
+    <div id="chat"></div>
+
+    <input id="message" placeholder="Habla con Jarvis...">
+    <button onclick="sendMessage()">Enviar</button>
+
+    <script>
+        async function sendMessage() {
+            const input = document.getElementById("message");
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            const chat = document.getElementById("chat");
+
+            chat.innerHTML +=
+                '<div class="message"><b>Tú:</b> ' +
+                message +
+                '</div>';
+
+            input.value = "";
+
+            const response = await fetch("/chat", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    message: message
+                })
+            });
+
+            const data = await response.json();
+
+            chat.innerHTML +=
+                '<div class="message"><b>JARVIS:</b> ' +
+                (data.response || data.error) +
+                '</div>';
+        }
+    </script>
+
+</body>
+</html>
+"""
 
 @app.route("/")
 def home():
-    return "JARVIS está en línea."
+    return render_template_string(HTML)
+
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -26,15 +132,13 @@ def chat():
         return jsonify({"error": "No se recibió ningún mensaje"}), 400
 
     try:
-        response = openai_client.responses.create(
+        response = client.responses.create(
             model="gpt-5",
             input=message
         )
 
-        answer = response.output_text
-
         return jsonify({
-            "response": answer
+            "response": response.output_text
         })
 
     except Exception as e:
