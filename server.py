@@ -4,1386 +4,1218 @@ from openai import OpenAI
 
 app = Flask(__name__)
 
+# ============================================================
+# OPENROUTER — CEREBRO DE JARVIS
+# ============================================================
+
 client = OpenAI(
     api_key=os.environ.get("OPENROUTER_API_KEY"),
     base_url="https://openrouter.ai/api/v1"
 )
 
+# ============================================================
+# INTERFAZ COMPLETA JARVIS
+# ============================================================
+
 HTML = r"""
 <!DOCTYPE html>
 <html lang="es">
 <head>
+
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>J.A.R.V.I.S</title>
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0,
+      maximum-scale=1.0,user-scalable=no">
+
+<title>J.A.R.V.I.S.</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800&family=Rajdhani:wght@400;500;600;700&display=swap"
+      rel="stylesheet">
 
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@400;500;600&display=swap');
-
-:root{
-    --bg:#070b12;
-    --panel:rgba(8,18,30,.78);
-    --cyan:#22d3ee;
-    --blue:#00d9ff;
-    --green:#54f7a5;
-    --red:#ff5577;
-    --text:#d9f9ff;
-    --muted:#71859a;
-    --line:rgba(34,211,238,.28);
-    --soft:rgba(34,211,238,.12);
-}
 
 *{
     box-sizing:border-box;
-}
-
-html,body{
     margin:0;
-    min-height:100%;
-    background:var(--bg);
-    color:var(--text);
-    font-family:Rajdhani,Arial,sans-serif;
+    padding:0;
 }
 
 body{
+    background:#05080e;
+    color:#8feeff;
+    font-family:'Rajdhani',sans-serif;
     overflow-x:hidden;
-
-    background:
-        radial-gradient(circle at 50% 45%,
-        rgba(0,217,255,.08),
-        transparent 35%),
-        linear-gradient(rgba(34,211,238,.025) 1px,
-        transparent 1px),
-        linear-gradient(90deg,
-        rgba(34,211,238,.025) 1px,
-        transparent 1px),
-        var(--bg);
-
-    background-size:auto,32px 32px,32px 32px;
 }
 
-body:before{
-    content:"";
-    position:fixed;
-    inset:0;
-    pointer-events:none;
-    background:radial-gradient(
-        ellipse at center,
-        transparent 45%,
-        rgba(0,0,0,.65)
-    );
-    z-index:20;
-}
-
-/* SPLASH */
+/* ============================================================
+   SPLASH
+   ============================================================ */
 
 #splash{
-    min-height:100vh;
+    position:fixed;
+    inset:0;
+    background:#05080e;
+    z-index:9999;
     display:flex;
     align-items:center;
     justify-content:center;
     flex-direction:column;
-    text-align:center;
-    padding:24px;
 }
 
-.brand{
-    font-family:Orbitron,sans-serif;
-    letter-spacing:12px;
-    color:var(--blue);
-    font-size:clamp(38px,8vw,78px);
-    text-shadow:
-        0 0 8px var(--blue),
-        0 0 30px rgba(0,217,255,.45);
+.splashTitle{
+    font-family:'Orbitron';
+    font-size:38px;
+    letter-spacing:8px;
+    color:#8feeff;
+    text-shadow:0 0 20px #00d9ff;
 }
 
-.tagline{
-    color:#8293a4;
-    letter-spacing:4px;
+.splashSub{
+    margin-top:8px;
+    letter-spacing:3px;
+    color:#5ca8bb;
     font-size:12px;
-    margin-top:12px;
 }
 
-.loader{
+.radar{
     width:150px;
     height:150px;
-    border:1px solid var(--line);
+    margin:40px 0 25px;
     border-radius:50%;
-    margin:42px 0 18px;
+    border:1px solid #00d9ff;
     position:relative;
     box-shadow:
-        0 0 30px rgba(0,217,255,.12),
-        inset 0 0 25px rgba(0,217,255,.05);
-    animation:spin 8s linear infinite;
+        0 0 15px #00d9ff44,
+        inset 0 0 30px #00d9ff22;
 }
 
-.loader:before,
-.loader:after{
+.radar:before{
     content:"";
     position:absolute;
-    inset:13px;
-    border:1px dashed rgba(34,211,238,.35);
+    inset:12px;
     border-radius:50%;
+    border:1px solid #00d9ff55;
 }
 
-.loader:after{
-    inset:45px;
-    border-style:solid;
-    border-color:var(--cyan) transparent var(--cyan) transparent;
-    animation:spin 2s linear infinite reverse;
-}
-
-.loader-dot{
+.radar:after{
+    content:"";
     position:absolute;
     left:50%;
     top:50%;
-    width:10px;
-    height:10px;
-    transform:translate(-50%,-50%);
-    border-radius:50%;
-    background:var(--cyan);
-    box-shadow:0 0 20px 7px rgba(34,211,238,.55);
-}
-
-.loader-sweep{
-    position:absolute;
-    left:50%;
-    top:50%;
-    width:50%;
+    width:65px;
     height:1px;
-    background:linear-gradient(90deg,var(--cyan),transparent);
-    transform-origin:left;
-    animation:radar 2.2s linear infinite;
+    background:#00eaff;
+    transform-origin:left center;
+    animation:sweep 2s linear infinite;
+    box-shadow:0 0 10px #00eaff;
 }
 
-.cal{
-    font-family:Orbitron;
-    color:#a7bac9;
-    letter-spacing:5px;
-    font-size:13px;
+@keyframes sweep{
+    from{transform:rotate(0deg);}
+    to{transform:rotate(360deg);}
+}
+
+.calibrate{
+    font-family:'Orbitron';
+    font-size:11px;
+    letter-spacing:4px;
 }
 
 .progress{
-    width:min(360px,80vw);
+    width:260px;
     height:3px;
-    background:#17222d;
-    margin-top:22px;
+    background:#12303a;
+    margin-top:15px;
     overflow:hidden;
 }
 
-.progress i{
-    display:block;
+.progressBar{
     height:100%;
-    width:0;
-    background:var(--cyan);
-    box-shadow:0 0 12px var(--cyan);
-    animation:load 3s ease forwards;
+    width:0%;
+    background:#00eaff;
+    box-shadow:0 0 10px #00eaff;
+    transition:width .1s;
 }
 
-.percent{
-    font-family:Orbitron;
-    color:var(--cyan);
-    font-size:11px;
-    margin-top:9px;
-}
-
-.dots{
-    display:flex;
-    gap:8px;
-    margin-top:32px;
-}
-
-.dots span{
-    width:5px;
-    height:5px;
-    border-radius:50%;
-    background:#33414d;
-}
-
-.dots span:first-child{
-    background:var(--cyan);
-    box-shadow:0 0 8px var(--cyan);
-}
-
-.hidden{
-    display:none!important;
-}
-
-/* APP */
+/* ============================================================
+   APP
+   ============================================================ */
 
 #app{
-    padding:18px;
-    max-width:1600px;
-    margin:auto;
+    display:none;
+    min-height:100vh;
+    padding:14px;
+    background:
+        radial-gradient(circle at center,#09202a 0%,#05080e 45%,#020407 100%);
 }
 
-/* HEADER */
+/* ============================================================
+   HEADER
+   ============================================================ */
 
-header{
-    min-height:74px;
-    border:1px solid var(--line);
-    background:var(--panel);
-    backdrop-filter:blur(12px);
+.header{
+    height:60px;
+    border:1px solid #00cce844;
+    background:#07121acc;
     display:flex;
     align-items:center;
     justify-content:space-between;
-    padding:12px 18px;
-    position:relative;
+    padding:0 16px;
+    box-shadow:0 0 25px #00d9ff08;
 }
 
-.corner:before,
-.corner:after{
-    content:"";
-    position:absolute;
-    width:13px;
-    height:13px;
-    border-color:var(--cyan);
-    border-style:solid;
-    opacity:.8;
-}
-
-.corner:before{
-    left:-1px;
-    top:-1px;
-    border-width:2px 0 0 2px;
-}
-
-.corner:after{
-    right:-1px;
-    bottom:-1px;
-    border-width:0 2px 2px 0;
-}
-
-.logoWrap{
+.logo{
     display:flex;
     align-items:center;
-    gap:13px;
+    gap:12px;
 }
 
 .diamond{
     width:27px;
     height:27px;
-    border:1px solid var(--cyan);
+    border:2px solid #00eaff;
     transform:rotate(45deg);
-    box-shadow:0 0 15px rgba(34,211,238,.4);
-    position:relative;
+    box-shadow:0 0 15px #00d9ff66;
 }
 
-.diamond i{
-    position:absolute;
-    inset:7px;
-    background:var(--cyan);
-    box-shadow:0 0 10px var(--cyan);
+.logoText{
+    font-family:'Orbitron';
+    font-size:17px;
+    letter-spacing:3px;
 }
 
-.logoText strong{
-    display:block;
-    font:600 21px Orbitron;
-    letter-spacing:5px;
-}
-
-.logoText small{
-    color:#708496;
-    letter-spacing:2px;
-    font-size:9px;
-}
-
-.headStats{
-    display:flex;
-    gap:28px;
-    align-items:center;
-}
-
-.statLabel{
-    font-size:9px;
-    color:#63778a;
-    letter-spacing:2px;
-}
-
-.statVal{
-    font-family:Orbitron;
+.status{
+    color:#4dffbb;
     font-size:12px;
-    letter-spacing:1px;
+    letter-spacing:2px;
 }
 
-.ok{
-    color:var(--green);
-    text-shadow:0 0 8px rgba(84,247,165,.6);
-}
-
-.headIcons{
+.headerRight{
     display:flex;
     gap:10px;
     align-items:center;
 }
 
-.iconBtn{
-    width:34px;
-    height:34px;
-    border:1px solid var(--line);
-    background:#08131f;
-    color:var(--cyan);
-    display:grid;
-    place-items:center;
-    cursor:pointer;
+.icon{
+    width:32px;
+    height:32px;
+    border:1px solid #00cce855;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    color:#67dff1;
 }
 
 .avatar{
     width:34px;
     height:34px;
-    border:1px solid var(--cyan);
     border-radius:50%;
-    display:grid;
-    place-items:center;
-    font:11px Orbitron;
-    color:var(--cyan);
-    box-shadow:0 0 12px rgba(34,211,238,.15);
+    border:1px solid #00eaff;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:'Orbitron';
+    font-size:11px;
 }
 
-.avatarName{
-    color:#71859a;
-    font-size:9px;
-    letter-spacing:1px;
-}
-
-/* GRID */
+/* ============================================================
+   MAIN GRID
+   ============================================================ */
 
 .grid{
-    display:grid;
-    grid-template-columns:1fr 1.55fr 1fr;
-    gap:14px;
     margin-top:14px;
+    display:grid;
+    grid-template-columns:250px 1fr 250px;
+    gap:14px;
 }
 
-.col{
-    display:flex;
-    flex-direction:column;
-    gap:14px;
-}
+/* ============================================================
+   PANELS
+   ============================================================ */
 
 .panel{
+    border:1px solid #00cce833;
+    background:#07131bd9;
+    padding:14px;
     position:relative;
-    border:1px solid var(--line);
-    background:var(--panel);
-    backdrop-filter:blur(12px);
-    padding:16px;
-    min-height:150px;
     overflow:hidden;
 }
 
-.label{
-    font:10px Orbitron;
-    color:#60778b;
+.panelTitle{
+    font-family:'Orbitron';
+    font-size:10px;
     letter-spacing:2px;
-    margin-bottom:12px;
+    color:#6ad9ed;
+    margin-bottom:14px;
 }
 
-.label span{
-    float:right;
-    color:#345365;
+.panelTitle:before{
+    content:"";
+    display:inline-block;
+    width:6px;
+    height:6px;
+    background:#00eaff;
+    margin-right:7px;
+    box-shadow:0 0 8px #00eaff;
 }
 
-.big{
-    font:36px Orbitron;
-    color:#e6fcff;
-    text-shadow:0 0 12px rgba(34,211,238,.35);
+/* ============================================================
+   LEFT
+   ============================================================ */
+
+.metric{
+    margin-bottom:18px;
 }
 
-.unit{
-    font-size:11px;
-    color:#63788b;
-}
-
-.row{
+.metricHead{
     display:flex;
     justify-content:space-between;
-    align-items:center;
-    gap:10px;
-}
-
-.tiny{
     font-size:11px;
-    color:#7c91a2;
     letter-spacing:1px;
 }
 
-.green{
-    color:var(--green);
+.metricValue{
+    color:#ffffff;
 }
 
-.signal{
-    font-size:30px;
-    color:var(--cyan);
-    text-shadow:0 0 15px var(--cyan);
-}
-
-/* BARS */
-
-.bars{
-    display:flex;
-    align-items:end;
-    gap:4px;
-    height:38px;
-    margin:9px 0;
-}
-
-.bars i{
-    display:block;
-    width:5px;
-    background:var(--cyan);
-    box-shadow:0 0 7px rgba(34,211,238,.45);
-    animation:equal 1s infinite alternate;
-}
-
-.barLine{
+.bar{
     height:5px;
-    background:#17232e;
-    margin:6px 0 11px;
+    margin-top:7px;
+    background:#10232b;
 }
 
-.barLine i{
-    display:block;
+.barFill{
     height:100%;
-    background:linear-gradient(90deg,var(--cyan),#78f5ff);
-    box-shadow:0 0 8px rgba(34,211,238,.5);
+    background:#00d9ff;
+    box-shadow:0 0 10px #00d9ff88;
 }
 
-/* CENTER */
+/* ============================================================
+   CENTER CORE
+   ============================================================ */
 
-.center{
+.coreArea{
+    min-height:580px;
     display:flex;
     flex-direction:column;
     align-items:center;
     justify-content:center;
-    min-height:540px;
-}
-
-.hud{
-    width:min(390px,75vw);
-    aspect-ratio:1;
-    border:1px solid var(--line);
-    border-radius:50%;
     position:relative;
-    display:grid;
-    place-items:center;
-    box-shadow:
-        0 0 50px rgba(0,217,255,.08),
-        inset 0 0 40px rgba(0,217,255,.05);
-    overflow:hidden;
-}
-
-.hud:before,
-.hud:after{
-    content:"";
-    position:absolute;
-    border-radius:50%;
-    border:1px solid var(--line);
-}
-
-.hud:before{
-    inset:14%;
-}
-
-.hud:after{
-    inset:31%;
-}
-
-.cross:before,
-.cross:after{
-    content:"";
-    position:absolute;
-    left:50%;
-    top:7%;
-    width:1px;
-    height:86%;
-    background:var(--soft);
-}
-
-.cross:after{
-    transform:rotate(90deg);
-}
-
-.sweep{
-    position:absolute;
-    left:50%;
-    top:50%;
-    width:50%;
-    height:2px;
-    background:linear-gradient(90deg,var(--cyan),transparent);
-    transform-origin:left;
-    animation:radar 3s linear infinite;
-    box-shadow:0 0 8px var(--cyan);
-}
-
-.ring{
-    position:absolute;
-    inset:6%;
-    border-radius:50%;
-    border:1px dashed rgba(34,211,238,.25);
-    animation:spin 20s linear infinite;
 }
 
 .core{
+    width:300px;
+    height:300px;
+    border-radius:50%;
+    border:1px solid #00eaff;
     position:relative;
-    border:1px solid var(--cyan);
-    padding:13px 24px;
-    font:13px Orbitron;
-    letter-spacing:3px;
-    color:var(--cyan);
-    box-shadow:0 0 20px rgba(34,211,238,.16);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    box-shadow:
+        0 0 30px #00eaff22,
+        inset 0 0 50px #00eaff11;
 }
 
-.core.active{
+.core:before{
+    content:"";
+    position:absolute;
+    inset:25px;
+    border-radius:50%;
+    border:1px dashed #00d9ff77;
+    animation:spin 20s linear infinite;
+}
+
+.core:after{
+    content:"";
+    position:absolute;
+    inset:50px;
+    border-radius:50%;
+    border:1px solid #00d9ff44;
+}
+
+@keyframes spin{
+    from{transform:rotate(0deg);}
+    to{transform:rotate(360deg);}
+}
+
+.coreCenter{
+    width:120px;
+    height:120px;
+    border-radius:50%;
+    background:#062431;
+    border:1px solid #00eaff;
     box-shadow:
-        0 0 25px rgba(34,211,238,.4),
-        inset 0 0 15px rgba(34,211,238,.1);
+        0 0 35px #00eaff44,
+        inset 0 0 25px #00eaff33;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:'Orbitron';
+    font-size:11px;
+    letter-spacing:2px;
+    z-index:2;
+}
+
+.sweepLine{
+    position:absolute;
+    width:130px;
+    height:1px;
+    background:#00eaff;
+    transform-origin:left center;
+    left:50%;
+    top:50%;
+    box-shadow:0 0 12px #00eaff;
+    animation:sweep 3s linear infinite;
+}
+
+.coreStatus{
+    margin-top:25px;
+    font-family:'Orbitron';
+    letter-spacing:3px;
+    font-size:12px;
+    color:#4dffbb;
 }
 
 .equalizer{
     display:flex;
-    align-items:center;
-    justify-content:center;
-    gap:5px;
-    height:60px;
-    margin-top:20px;
+    align-items:end;
+    gap:4px;
+    height:30px;
+    margin-top:15px;
 }
 
-.equalizer i{
-    width:5px;
-    height:12px;
-    background:var(--cyan);
-    box-shadow:0 0 8px rgba(34,211,238,.55);
-    animation:equal .8s infinite alternate;
+.eq{
+    width:4px;
+    background:#00eaff;
+    animation:eq 1s ease-in-out infinite alternate;
 }
 
-/* COMMAND */
+.eq:nth-child(1){height:10px;animation-delay:.1s}
+.eq:nth-child(2){height:20px;animation-delay:.3s}
+.eq:nth-child(3){height:14px;animation-delay:.2s}
+.eq:nth-child(4){height:27px;animation-delay:.5s}
+.eq:nth-child(5){height:17px;animation-delay:.1s}
+.eq:nth-child(6){height:24px;animation-delay:.4s}
+.eq:nth-child(7){height:12px;animation-delay:.2s}
+
+@keyframes eq{
+    from{transform:scaleY(.5)}
+    to{transform:scaleY(1)}
+}
+
+/* ============================================================
+   COMMAND BUTTON
+   ============================================================ */
 
 .commandBtn{
-    margin-top:12px;
-    border:1px solid var(--cyan);
-    background:rgba(34,211,238,.05);
-    color:var(--cyan);
-    padding:13px 28px;
-    border-radius:30px;
-    font:11px Orbitron;
+    margin-top:28px;
+    width:250px;
+    height:48px;
+    border:1px solid #00eaff;
+    background:#06202a;
+    color:#8feeff;
+    font-family:'Orbitron';
     letter-spacing:2px;
-    box-shadow:0 0 18px rgba(34,211,238,.1);
     cursor:pointer;
-    transition:.2s;
+    box-shadow:0 0 18px #00eaff22;
 }
 
-.commandBtn:hover,
-.commandBtn.listening{
-    background:rgba(34,211,238,.14);
-    box-shadow:0 0 30px rgba(34,211,238,.35);
+.commandBtn:active{
+    background:#00eaff22;
 }
 
-.commandBtn.speaking{
-    border-color:var(--green);
-    color:var(--green);
-    box-shadow:0 0 30px rgba(84,247,165,.3);
+/* ============================================================
+   RIGHT
+   ============================================================ */
+
+.log{
+    height:150px;
+    overflow:hidden;
+    font-size:10px;
+    line-height:1.8;
+    color:#67b8c8;
 }
 
-/* VOICE PANEL */
+.log span{
+    color:#4dffbb;
+}
+
+.terminal{
+    height:160px;
+    overflow:auto;
+    font-family:monospace;
+    font-size:10px;
+    color:#65d7e8;
+    background:#02070b;
+    padding:8px;
+}
+
+/* ============================================================
+   VOICE PANEL
+   ============================================================ */
 
 .voicePanel{
     margin-top:14px;
 }
 
-.voiceGrid{
-    display:grid;
-    grid-template-columns:1.5fr .8fr .8fr;
-    gap:10px;
+.voiceRow{
+    margin-bottom:13px;
 }
 
-.voiceSelect,
-.voiceRange{
-    width:100%;
-    background:#050d15;
-    color:#b9dbe4;
-    border:1px solid var(--line);
-    padding:9px;
-    outline:none;
-}
-
-.voiceRange{
-    padding:5px;
-}
-
-.rangeValue{
-    color:var(--cyan);
-    font-family:Orbitron;
-}
-
-/* DEFENSE */
-
-.defense{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:8px;
-    margin-top:12px;
-}
-
-.def{
-    border:1px solid var(--soft);
-    height:54px;
-    display:grid;
-    place-items:center;
-    color:var(--cyan);
-    background:#08131d;
-    font-size:20px;
-}
-
-/* LOG */
-
-.log{
-    height:160px;
-    overflow:auto;
-    font-family:monospace;
+.voiceLabel{
     font-size:10px;
-    color:#8097a8;
-    line-height:1.8;
+    letter-spacing:2px;
+    color:#6ad9ed;
+    margin-bottom:6px;
 }
 
-.log b{
-    color:var(--cyan);
-    font-weight:400;
+select,
+input[type=range]{
+    width:100%;
 }
 
-/* TERMINAL */
-
-.terminal{
-    background:#03080d;
-    border:1px solid var(--soft);
-    padding:12px;
-    font-family:monospace;
-    font-size:11px;
-    color:#9ab0bd;
-    min-height:105px;
+select{
+    background:#041017;
+    color:#8feeff;
+    border:1px solid #00cce855;
+    padding:8px;
 }
 
-.prompt{
-    color:var(--cyan);
+input[type=range]{
+    accent-color:#00eaff;
 }
 
-.answer{
-    color:#71818c;
-    font-style:italic;
-    margin-top:10px;
-}
+/* ============================================================
+   CHAT
+   ============================================================ */
 
-/* CHAT */
-
-.chat{
-    margin-top:5px;
+.bottom{
+    margin-top:14px;
+    border:1px solid #00cce833;
+    padding:10px;
     display:flex;
-    gap:8px;
+    gap:10px;
+    background:#07131bd9;
 }
 
-.chat input{
+#message{
     flex:1;
-    background:#050d15;
-    border:1px solid var(--line);
+    background:#02080c;
+    border:1px solid #00cce855;
     color:white;
     padding:13px;
-    font:13px Rajdhani;
     outline:none;
+    font-family:'Rajdhani';
+    font-size:15px;
 }
 
-.chat input:focus{
-    border-color:var(--cyan);
-    box-shadow:0 0 15px rgba(34,211,238,.1);
-}
-
-.chat button{
-    border:1px solid var(--cyan);
-    background:var(--cyan);
-    color:#001018;
-    padding:0 18px;
-    font:bold 11px Orbitron;
+.send{
+    width:100px;
+    background:#06202a;
+    border:1px solid #00eaff;
+    color:#8feeff;
+    font-family:'Orbitron';
     cursor:pointer;
 }
 
-.response{
-    margin-top:10px;
-    max-height:140px;
-    overflow:auto;
-    font-size:12px;
-    color:#b9d2dd;
-    line-height:1.5;
+.mic{
+    width:55px;
+    border:1px solid #00eaff;
+    background:#06202a;
+    color:#8feeff;
+    font-size:20px;
+    cursor:pointer;
 }
 
-footer{
+.mic.listening{
+    background:#00eaff33;
+    box-shadow:0 0 25px #00eaff;
+}
+
+#voiceStatus{
     text-align:center;
-    color:#344a5a;
-    font:8px Orbitron;
-    letter-spacing:3px;
-    padding:15px;
+    margin-top:7px;
+    font-size:10px;
+    letter-spacing:2px;
+    color:#6ad9ed;
 }
 
-/* ANIMATIONS */
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 
-@keyframes spin{
-    to{transform:rotate(360deg)}
-}
-
-@keyframes radar{
-    to{transform:rotate(360deg)}
-}
-
-@keyframes load{
-    to{width:100%}
-}
-
-@keyframes equal{
-    to{height:38px}
-}
-
-/* MOBILE */
-
-@media(max-width:1050px){
+@media(max-width:900px){
 
     .grid{
-        grid-template-columns:1fr 1fr;
+        grid-template-columns:1fr;
     }
 
-    .center{
-        grid-column:1/-1;
+    .coreArea{
+        min-height:470px;
         order:-1;
     }
 
-    .headStats{
-        gap:12px;
+    .core{
+        width:250px;
+        height:250px;
     }
+
+    .panel{
+        min-height:auto;
+    }
+
 }
 
-@media(max-width:700px){
-
-    #app{
-        padding:9px;
-    }
-
-    .grid{
-        grid-template-columns:1fr;
-    }
-
-    .center{
-        min-height:470px;
-    }
-
-    .headStats{
-        display:none;
-    }
-
-    .iconBtn{
-        display:none;
-    }
-
-    .logoText small{
-        display:none;
-    }
-
-    .avatarName{
-        display:none;
-    }
-
-    .hud{
-        width:82vw;
-    }
-
-    .voiceGrid{
-        grid-template-columns:1fr;
-    }
-
-    .chat button{
-        padding:0 12px;
-    }
-}
 </style>
 </head>
 
 <body>
 
-<section id="splash">
+<!-- ============================================================
+     SPLASH
+     ============================================================ -->
 
-    <div class="brand">J.A.R.V.I.S</div>
+<div id="splash">
 
-    <div class="tagline">
+    <div class="splashTitle">J.A.R.V.I.S</div>
+
+    <div class="splashSub">
         JUST A RATHER VERY INTELLIGENT SYSTEM
     </div>
 
-    <div class="loader">
-        <div class="loader-sweep"></div>
-        <div class="loader-dot"></div>
-    </div>
+    <div class="radar"></div>
 
-    <div class="cal">CALIBRATING</div>
+    <div class="calibrate">
+        CALIBRATING
+    </div>
 
     <div class="progress">
-        <i></i>
+        <div class="progressBar" id="progressBar"></div>
     </div>
 
-    <div class="percent" id="pct">0%</div>
-
-    <div class="dots">
-        <span></span><span></span><span></span>
-        <span></span><span></span><span></span>
-    </div>
-
-</section>
+</div>
 
 
-<main id="app" class="hidden">
+<!-- ============================================================
+     APP
+     ============================================================ -->
 
-<header class="corner">
+<div id="app">
 
-    <div class="logoWrap">
+    <div class="header">
 
-        <div class="diamond">
-            <i></i>
-        </div>
+        <div class="logo">
 
-        <div class="logoText">
-            <strong>JARVIS</strong>
-            <small>
-                JUST A RATHER VERY INTELLIGENT SYSTEM
-            </small>
-        </div>
-
-    </div>
-
-    <div class="headStats">
-
-        <div>
-            <div class="statLabel">SYSTEM STATUS</div>
-            <div class="statVal ok">
-                ● OPTIMAL
-            </div>
-        </div>
-
-        <div>
-            <div class="statLabel">LOCAL TIME</div>
-            <div class="statVal" id="clock">
-                --:--:--
-            </div>
-        </div>
-
-    </div>
-
-    <div class="headIcons">
-
-        <button class="iconBtn">♢</button>
-        <button class="iconBtn">⚙</button>
-
-        <div class="avatar">TS</div>
-
-        <div class="avatarName">
-            T. STARK
-        </div>
-
-    </div>
-
-</header>
-
-
-<section class="grid">
-
-
-<div class="col">
-
-    <div class="panel corner">
-
-        <div class="label">
-            SYSTEM // VITAL SIGNS
-            <span>01</span>
-        </div>
-
-        <div class="row">
+            <div class="diamond"></div>
 
             <div>
-                <div class="big">72</div>
-                <div class="unit">
-                    BPM / HEART RATE
-                </div>
-            </div>
-
-            <div class="signal">⌁</div>
-
-        </div>
-
-        <div class="bars" id="pulseBars"></div>
-
-        <div class="row tiny">
-            <span>TEMP 36.6°C</span>
-
-            <span class="green">
-                NEURAL LINK: ACTIVE
-            </span>
-        </div>
-
-    </div>
-
-
-    <div class="panel corner">
-
-        <div class="label">
-            SYSTEM // RT-MONITOR
-            <span>02</span>
-        </div>
-
-        <div class="tiny">
-            CPU LOAD
-            <b id="cpu">34%</b>
-        </div>
-
-        <div class="barLine">
-            <i id="cpuBar" style="width:34%"></i>
-        </div>
-
-        <div class="tiny">
-            MEMORY
-            <b id="mem">61%</b>
-        </div>
-
-        <div class="barLine">
-            <i id="memBar" style="width:61%"></i>
-        </div>
-
-        <div class="tiny">
-            STORAGE
-            <b>48%</b>
-        </div>
-
-        <div class="barLine">
-            <i style="width:48%"></i>
-        </div>
-
-    </div>
-
-
-    <div class="panel corner">
-
-        <div class="label">
-            NETWORK // SECURE LINK
-            <span>03</span>
-        </div>
-
-        <div class="row">
-
-            <div class="signal">◉</div>
-
-            <div>
-                <div class="statVal">
-                    SIGNAL ENCRYPTED
-                </div>
-
-                <div class="tiny">
-                    SAT-LINK // ORBITAL-7
-                </div>
+                <div class="logoText">J.A.R.V.I.S</div>
+                <div class="status">● SYSTEM ONLINE</div>
             </div>
 
         </div>
 
-    </div>
+        <div class="headerRight">
 
-</div>
+            <div class="icon">⌁</div>
+            <div class="icon">◌</div>
 
-
-<div class="col center">
-
-    <div class="hud">
-
-        <div class="ring"></div>
-        <div class="cross"></div>
-        <div class="sweep"></div>
-
-        <div class="core" id="core">
-            CORE ACTIVE
-        </div>
-
-    </div>
-
-    <div class="equalizer" id="eq"></div>
-
-    <button
-        class="commandBtn"
-        id="micButton"
-        onclick="toggleVoice()">
-
-        🎙️ &nbsp;
-        <span id="micText">
-            AWAITING COMMAND...
-        </span>
-
-    </button>
-
-</div>
-
-
-<div class="col">
-
-    <div class="panel corner">
-
-        <div class="label">
-            SYSTEM // POWER CORE
-            <span>04</span>
-        </div>
-
-        <div class="tiny">
-            POWER CORE <b>94%</b>
-        </div>
-
-        <div class="barLine">
-            <i style="width:94%"></i>
-        </div>
-
-        <div class="tiny">
-            STRUCTURAL <b>87%</b>
-        </div>
-
-        <div class="barLine">
-            <i style="width:87%"></i>
-        </div>
-
-        <div class="label" style="margin-top:13px">
-            DEFENSE SYSTEMS
-        </div>
-
-        <div class="defense">
-
-            <div class="def">⬡</div>
-            <div class="def">ϟ</div>
-            <div class="def">⌁</div>
-            <div class="def">⏻</div>
+            <div class="avatar">TS</div>
 
         </div>
 
     </div>
 
 
-    <div class="panel corner">
+    <div class="grid">
 
-        <div class="label">
-            SYSTEM // LIVE LOG
-            <span>05</span>
-        </div>
-
-        <div class="log" id="log"></div>
-
-    </div>
-
-
-    <div class="panel corner">
-
-        <div class="label">
-            SYSTEM // COMMAND TERMINAL
-            <span>06</span>
-        </div>
-
-        <div class="terminal">
-
-            <div class="prompt">
-                jarvis --analyze --current-environment
-            </div>
-
-            <div class="answer">
-                Environment nominal.
-                All primary systems operational.
-                Awaiting user command.
-            </div>
-
-        </div>
-
-    </div>
-
-</div>
-
-</section>
-
-
-<!-- VOICE CONTROL -->
-
-<div class="panel corner voicePanel">
-
-    <div class="label">
-        JARVIS // VOICE CONTROL
-        <span>AUDIO CORE</span>
-    </div>
-
-    <div class="voiceGrid">
+        <!-- ====================================================
+             LEFT
+             ==================================================== -->
 
         <div>
-            <div class="tiny">
-                VOICE
+
+            <div class="panel">
+
+                <div class="panelTitle">
+                    VITAL SIGNS
+                </div>
+
+                <div class="metric">
+
+                    <div class="metricHead">
+                        <span>CPU LOAD</span>
+                        <span class="metricValue" id="cpu">32%</span>
+                    </div>
+
+                    <div class="bar">
+                        <div class="barFill"
+                             id="cpuBar"
+                             style="width:32%">
+                        </div>
+                    </div>
+
+                </div>
+
+                <div class="metric">
+
+                    <div class="metricHead">
+                        <span>MEMORY</span>
+                        <span class="metricValue" id="memory">48%</span>
+                    </div>
+
+                    <div class="bar">
+                        <div class="barFill"
+                             id="memoryBar"
+                             style="width:48%">
+                        </div>
+                    </div>
+
+                </div>
+
+                <div class="metric">
+
+                    <div class="metricHead">
+                        <span>NETWORK</span>
+                        <span class="metricValue">SECURE</span>
+                    </div>
+
+                    <div class="bar">
+                        <div class="barFill"
+                             style="width:94%">
+                        </div>
+                    </div>
+
+                </div>
+
             </div>
 
-            <select
-                id="voiceSelect"
-                class="voiceSelect">
-            </select>
+
+            <div class="panel"
+                 style="margin-top:14px">
+
+                <div class="panelTitle">
+                    RT-MONITOR
+                </div>
+
+                <div class="log" id="systemLog">
+
+                    <div><span>[OK]</span> Neural core online</div>
+                    <div><span>[OK]</span> OpenRouter connected</div>
+                    <div><span>[OK]</span> Voice system ready</div>
+                    <div><span>[OK]</span> HUD interface loaded</div>
+                    <div><span>[OK]</span> Secure link active</div>
+
+                </div>
+
+            </div>
+
+
+            <div class="panel"
+                 style="margin-top:14px">
+
+                <div class="panelTitle">
+                    NETWORK SECURE LINK
+                </div>
+
+                <div style="font-size:11px;line-height:2">
+
+                    ENCRYPTION
+                    <span style="float:right;color:#4dffbb">
+                        AES-256
+                    </span>
+
+                    <br>
+
+                    CONNECTION
+                    <span style="float:right;color:#4dffbb">
+                        SECURE
+                    </span>
+
+                    <br>
+
+                    LATENCY
+                    <span style="float:right">
+                        42 ms
+                    </span>
+
+                </div>
+
+            </div>
+
         </div>
 
-        <div>
-            <div class="tiny">
-                SPEED:
-                <span
-                    class="rangeValue"
-                    id="speedValue">
-                    0.92
-                </span>
+
+        <!-- ====================================================
+             CENTER
+             ==================================================== -->
+
+        <div class="panel coreArea">
+
+            <div class="core">
+
+                <div class="sweepLine"></div>
+
+                <div class="coreCenter">
+                    CORE ACTIVE
+                </div>
+
             </div>
 
-            <input
-                id="speed"
-                class="voiceRange"
-                type="range"
-                min="0.65"
-                max="1.15"
-                step="0.01"
-                value="0.92">
+            <div class="coreStatus" id="coreStatus">
+                AWAITING COMMAND
+            </div>
+
+            <div class="equalizer">
+
+                <div class="eq"></div>
+                <div class="eq"></div>
+                <div class="eq"></div>
+                <div class="eq"></div>
+                <div class="eq"></div>
+                <div class="eq"></div>
+                <div class="eq"></div>
+
+            </div>
+
+
+            <button class="commandBtn"
+                    onclick="focusChat()">
+
+                ◉ &nbsp; AWAITING COMMAND...
+
+            </button>
+
         </div>
 
+
+        <!-- ====================================================
+             RIGHT
+             ==================================================== -->
+
         <div>
-            <div class="tiny">
-                PITCH:
-                <span
-                    class="rangeValue"
-                    id="pitchValue">
-                    0.92
-                </span>
+
+            <div class="panel">
+
+                <div class="panelTitle">
+                    POWER CORE
+                </div>
+
+                <div class="metric">
+
+                    <div class="metricHead">
+                        <span>ENERGY</span>
+                        <span>87%</span>
+                    </div>
+
+                    <div class="bar">
+                        <div class="barFill"
+                             style="width:87%">
+                        </div>
+                    </div>
+
+                </div>
+
             </div>
 
-            <input
-                id="pitch"
-                class="voiceRange"
-                type="range"
-                min="0.6"
-                max="1.3"
-                step="0.01"
-                value="0.92">
+
+            <div class="panel"
+                 style="margin-top:14px">
+
+                <div class="panelTitle">
+                    DEFENSE SYSTEMS
+                </div>
+
+                <div style="line-height:2;font-size:11px">
+
+                    PERIMETER
+                    <span style="float:right;color:#4dffbb">
+                        ONLINE
+                    </span>
+
+                    <br>
+
+                    FIREWALL
+                    <span style="float:right;color:#4dffbb">
+                        ACTIVE
+                    </span>
+
+                    <br>
+
+                    SECURITY
+                    <span style="float:right;color:#4dffbb">
+                        MAX
+                    </span>
+
+                </div>
+
+            </div>
+
+
+            <div class="panel"
+                 style="margin-top:14px">
+
+                <div class="panelTitle">
+                    LIVE LOG
+                </div>
+
+                <div class="log"
+                     id="liveLog">
+
+                    <div>> Initializing...</div>
+                    <div>> Waiting...</div>
+
+                </div>
+
+            </div>
+
+
+            <div class="panel"
+                 style="margin-top:14px">
+
+                <div class="panelTitle">
+                    COMMAND TERMINAL
+                </div>
+
+                <div class="terminal"
+                     id="terminal">
+
+                    JARVIS TERMINAL<br>
+                    ------------------<br>
+                    System ready.<br>
+
+                </div>
+
+            </div>
+
+
+            <!-- =================================================
+                 VOICE
+                 ================================================= -->
+
+            <div class="panel voicePanel">
+
+                <div class="panelTitle">
+                    JARVIS // VOICE CONTROL
+                </div>
+
+                <div class="voiceRow">
+
+                    <div class="voiceLabel">
+                        NEURAL VOICE
+                    </div>
+
+                    <select id="voiceSelect">
+
+                        <option value="em_alex">
+                            ALEX // ESPAÑOL MASCULINO
+                        </option>
+
+                        <option value="em_santa">
+                            SANTA // ESPAÑOL MASCULINO
+                        </option>
+
+                        <option value="ef_dora">
+                            DORA // ESPAÑOL FEMENINO
+                        </option>
+
+                    </select>
+
+                </div>
+
+
+                <div class="voiceRow">
+
+                    <div class="voiceLabel">
+                        VELOCIDAD
+                    </div>
+
+                    <input
+                        id="speed"
+                        type="range"
+                        min="0.7"
+                        max="1.3"
+                        step="0.05"
+                        value="0.95">
+
+                </div>
+
+
+                <div class="voiceRow">
+
+                    <div class="voiceLabel">
+                        VOLUMEN
+                    </div>
+
+                    <input
+                        id="volume"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value="1">
+
+                </div>
+
+                <div id="voiceStatus">
+                    NEURAL VOICE READY
+                </div>
+
+            </div>
+
         </div>
 
     </div>
 
-</div>
 
+    <!-- ========================================================
+         CHAT
+         ======================================================== -->
 
-<!-- COMMUNICATION -->
+    <div class="bottom">
 
-<div class="panel corner" style="margin-top:14px">
+        <button
+            class="mic"
+            id="micButton"
+            onclick="startListening()">
 
-    <div class="label">
-        JARVIS // DIRECT COMMUNICATION
-        <span>VOICE / TEXT</span>
-    </div>
+            🎙
 
-    <div class="chat">
+        </button>
 
         <input
             id="message"
             placeholder="Habla con JARVIS..."
             autocomplete="off">
 
-        <button onclick="sendMessage()">
+        <button
+            class="send"
+            onclick="sendMessage()">
+
             SEND
+
         </button>
 
-    </div>
-
-    <div
-        class="response"
-        id="response">
     </div>
 
 </div>
 
 
-<footer>
-    J.A.R.V.I.S // CORE ONLINE // ENCRYPTED CONNECTION
-</footer>
+<script type="module">
 
-</main>
+/* ============================================================
+   KOKORO TTS
+   ============================================================ */
+
+let kokoro = null;
+let kokoroLoading = false;
+let currentAudio = null;
+
+const voiceStatus =
+    document.getElementById("voiceStatus");
+
+const coreStatus =
+    document.getElementById("coreStatus");
 
 
-<script>
+/*
+   Cargamos Kokoro directamente en el navegador.
 
-/* =========================
-   SPLASH
-========================= */
+   El modelo se descarga la primera vez y el navegador
+   puede guardarlo en caché.
+*/
 
-const splash =
-    document.getElementById("splash");
+async function loadKokoro(){
 
-const app =
-    document.getElementById("app");
+    if(kokoro || kokoroLoading)
+        return;
 
-const pct =
-    document.getElementById("pct");
+    kokoroLoading = true;
 
-let p = 0;
+    voiceStatus.innerText =
+        "LOADING NEURAL VOICE...";
 
-const timer =
-    setInterval(() => {
+    try{
 
-        p += 2;
+        const module =
+            await import(
+                "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm"
+            );
 
-        pct.textContent =
-            p + "%";
+        const KokoroTTS =
+            module.KokoroTTS;
 
-        if(p >= 100){
+        kokoro =
+            await KokoroTTS.from_pretrained(
+                "onnx-community/Kokoro-82M-v1.0-ONNX",
+                {
+                    dtype:"q8",
+                    device:"wasm"
+                }
+            );
 
-            clearInterval(timer);
+        voiceStatus.innerText =
+            "NEURAL VOICE READY";
 
-            setTimeout(() => {
+        addLog("Kokoro neural voice online");
 
-                splash.classList.add("hidden");
-                app.classList.remove("hidden");
+    }catch(error){
 
-            },350);
+        console.error(error);
+
+        voiceStatus.innerText =
+            "VOICE ERROR";
+
+        addLog(
+            "Kokoro error: " + error.message
+        );
+
+    }
+
+    kokoroLoading = false;
+}
+
+
+/* ============================================================
+   GENERAR VOZ
+   ============================================================ */
+
+async function speakJarvis(text){
+
+    if(!text)
+        return;
+
+    await loadKokoro();
+
+    if(!kokoro)
+        return;
+
+    try{
+
+        if(currentAudio){
+
+            currentAudio.pause();
+
+            currentAudio = null;
+
         }
 
-    },55);
+        coreStatus.innerText =
+            "SPEAKING";
+
+        voiceStatus.innerText =
+            "GENERATING NEURAL SPEECH...";
+
+        const voice =
+            document.getElementById(
+                "voiceSelect"
+            ).value;
+
+        const speed =
+            parseFloat(
+                document.getElementById(
+                    "speed"
+                ).value
+            );
+
+        const volume =
+            parseFloat(
+                document.getElementById(
+                    "volume"
+                ).value
+            );
 
 
-/* =========================
-   VISUAL BARS
-========================= */
+        const audio =
+            await kokoro.generate(
+                text,
+                {
+                    voice:voice,
+                    speed:speed
+                }
+            );
 
-function makeBars(id,n){
 
-    const el =
-        document.getElementById(id);
+        /*
+           Kokoro devuelve audio PCM/WAV.
+           Creamos un Blob y lo reproducimos.
+        */
 
-    for(let i=0;i<n;i++){
+        const blob =
+            new Blob(
+                [audio.toBlob
+                    ? await audio.toBlob()
+                    : audio.audio],
+                {
+                    type:"audio/wav"
+                }
+            );
 
-        const x =
-            document.createElement("i");
 
-        x.style.height =
-            (8 + Math.random()*30) + "px";
+        const url =
+            URL.createObjectURL(blob);
 
-        el.appendChild(x);
+        currentAudio =
+            new Audio(url);
+
+        currentAudio.volume =
+            volume;
+
+        currentAudio.onended =
+            function(){
+
+                coreStatus.innerText =
+                    "AWAITING COMMAND";
+
+                voiceStatus.innerText =
+                    "NEURAL VOICE READY";
+
+                URL.revokeObjectURL(url);
+
+            };
+
+
+        await currentAudio.play();
+
+        voiceStatus.innerText =
+            "SPEAKING";
+
+    }catch(error){
+
+        console.error(error);
+
+        voiceStatus.innerText =
+            "VOICE PLAYBACK ERROR";
+
+        coreStatus.innerText =
+            "AWAITING COMMAND";
+
     }
+
 }
 
-makeBars("pulseBars",32);
-makeBars("eq",24);
+
+/* ============================================================
+   HACER DISPONIBLE GLOBALMENTE
+   ============================================================ */
+
+window.speakJarvis =
+    speakJarvis;
 
 
-/* =========================
-   CLOCK
-========================= */
-
-function updateClock(){
-
-    document.getElementById("clock")
-        .textContent =
-        new Date().toLocaleTimeString(
-            "es-PA",
-            {hour12:false}
-        );
-}
-
-setInterval(updateClock,1000);
-updateClock();
-
-
-/* =========================
-   LOG
-========================= */
-
-function logLine(text){
-
-    const log =
-        document.getElementById("log");
-
-    const t =
-        new Date().toLocaleTimeString(
-            "es-PA",
-            {hour12:false}
-        );
-
-    log.innerHTML =
-        "<div><b>[" +
-        t +
-        "]</b> " +
-        text +
-        "</div>" +
-        log.innerHTML;
-}
-
-[
-    "SYSTEM INTEGRITY CHECK COMPLETE",
-    "NEURAL LINK STANDBY",
-    "ENCRYPTED SIGNAL ESTABLISHED",
-    "CORE DIAGNOSTICS NOMINAL",
-    "VOICE CORE INITIALIZED"
-].forEach(
-    (x,i) =>
-        setTimeout(
-            () => logLine(x),
-            i*450
-        )
-);
-
-
-/* =========================
-   SYSTEM ACTIVITY
-========================= */
-
-setInterval(() => {
-
-    const v =
-        25 + Math.floor(Math.random()*55);
-
-    document.getElementById("cpu")
-        .textContent = v + "%";
-
-    document.getElementById("cpuBar")
-        .style.width = v + "%";
-
-
-    const m =
-        45 + Math.floor(Math.random()*25);
-
-    document.getElementById("mem")
-        .textContent = m + "%";
-
-    document.getElementById("memBar")
-        .style.width = m + "%";
-
-
-    document.querySelectorAll(
-        "#pulseBars i,#eq i"
-    ).forEach(
-        x =>
-            x.style.height =
-            (7 + Math.random()*34) + "px"
-    );
-
-},900);
-
-
-/* =========================
-   VOICE RECOGNITION
-========================= */
+/* ============================================================
+   MICRÓFONO
+   ============================================================ */
 
 let recognition = null;
-let listening = false;
-let speaking = false;
 
 const SpeechRecognition =
     window.SpeechRecognition ||
     window.webkitSpeechRecognition;
-
-const micButton =
-    document.getElementById("micButton");
-
-const micText =
-    document.getElementById("micText");
-
-const core =
-    document.getElementById("core");
 
 
 if(SpeechRecognition){
@@ -1392,572 +1224,469 @@ if(SpeechRecognition){
         new SpeechRecognition();
 
     recognition.lang = "es-PA";
+
     recognition.continuous = false;
+
     recognition.interimResults = false;
 
 
-    recognition.onstart = function(){
+    recognition.onstart =
+        function(){
 
-        listening = true;
+            document
+                .getElementById("micButton")
+                .classList.add("listening");
 
-        micText.textContent =
-            "LISTENING...";
+            coreStatus.innerText =
+                "LISTENING";
 
-        micButton.classList.add(
-            "listening"
-        );
+            voiceStatus.innerText =
+                "LISTENING...";
 
-        core.classList.add("active");
-
-        logLine(
-            "MICROPHONE // LISTENING"
-        );
-    };
+        };
 
 
     recognition.onresult =
         function(event){
 
             const text =
-                event.results[0][0]
-                    .transcript;
+                event.results[0][0].transcript;
 
-            document.getElementById(
-                "message"
-            ).value = text;
-
-            micText.textContent =
-                "THINKING...";
-
-            logLine(
-                "VOICE COMMAND RECEIVED"
-            );
+            document
+                .getElementById("message")
+                .value = text;
 
             sendMessage();
+
         };
 
 
     recognition.onerror =
         function(event){
 
-            listening = false;
+            console.error(event.error);
 
-            micButton.classList.remove(
-                "listening"
-            );
+            coreStatus.innerText =
+                "AWAITING COMMAND";
 
-            micText.textContent =
+            voiceStatus.innerText =
                 "MIC ERROR";
 
-            logLine(
-                "MIC ERROR // " +
-                event.error
-            );
-
-            setTimeout(
-                resetMic,
-                1800
-            );
         };
 
 
     recognition.onend =
         function(){
 
-            listening = false;
-
-            micButton.classList.remove(
-                "listening"
-            );
-
-            if(!speaking){
-
-                micText.textContent =
-                    "AWAITING COMMAND...";
-            }
-        };
-}
-
-
-function resetMic(){
-
-    if(!speaking){
-
-        micText.textContent =
-            "AWAITING COMMAND...";
-
-        micButton.classList.remove(
-            "listening",
-            "speaking"
-        );
-    }
-}
-
-
-function toggleVoice(){
-
-    if(!recognition){
-
-        micText.textContent =
-            "MIC NOT SUPPORTED";
-
-        logLine(
-            "VOICE INPUT NOT SUPPORTED"
-        );
-
-        return;
-    }
-
-
-    if(listening){
-
-        recognition.stop();
-
-        return;
-    }
-
-
-    try{
-
-        recognition.start();
-
-    }catch(error){
-
-        console.log(error);
-
-    }
-}
-
-
-/* =========================
-   VOICE SYNTHESIS
-========================= */
-
-const voiceSelect =
-    document.getElementById(
-        "voiceSelect"
-    );
-
-const speed =
-    document.getElementById(
-        "speed"
-    );
-
-const pitch =
-    document.getElementById(
-        "pitch"
-    );
-
-const speedValue =
-    document.getElementById(
-        "speedValue"
-    );
-
-const pitchValue =
-    document.getElementById(
-        "pitchValue"
-    );
-
-
-function loadVoices(){
-
-    if(!("speechSynthesis" in window))
-        return;
-
-    const voices =
-        speechSynthesis.getVoices();
-
-    voiceSelect.innerHTML = "";
-
-    const spanish =
-        voices.filter(
-            v =>
-                v.lang
-                .toLowerCase()
-                .startsWith("es")
-        );
-
-    const list =
-        spanish.length
-        ? spanish
-        : voices;
-
-
-    list.forEach(
-        (voice,index) => {
-
-            const option =
-                document.createElement(
-                    "option"
+            document
+                .getElementById("micButton")
+                .classList.remove(
+                    "listening"
                 );
 
-            option.value =
-                index;
+        };
 
-            option.textContent =
-                voice.name +
-                " — " +
-                voice.lang;
+}
 
-            voiceSelect.appendChild(
-                option
+
+/* ============================================================
+   ESCUCHAR
+   ============================================================ */
+
+window.startListening =
+    function(){
+
+        if(!recognition){
+
+            alert(
+                "Tu navegador no permite reconocimiento de voz."
             );
-        }
-    );
-}
 
+            return;
 
-if("speechSynthesis" in window){
-
-    speechSynthesis.onvoiceschanged =
-        loadVoices;
-
-    loadVoices();
-}
-
-
-speed.addEventListener(
-    "input",
-    () => {
-
-        speedValue.textContent =
-            speed.value;
-    }
-);
-
-
-pitch.addEventListener(
-    "input",
-    () => {
-
-        pitchValue.textContent =
-            pitch.value;
-    }
-);
-
-
-function speakJarvis(text){
-
-    if(!("speechSynthesis" in window)){
-
-        logLine(
-            "AUDIO OUTPUT NOT SUPPORTED"
-        );
-
-        return;
-    }
-
-
-    speechSynthesis.cancel();
-
-
-    const cleanText =
-        text
-        .replace(/[*#_`]/g,"")
-        .replace(/\n+/g,". ")
-        .trim();
-
-
-    const utterance =
-        new SpeechSynthesisUtterance(
-            cleanText
-        );
-
-
-    utterance.lang = "es-PA";
-
-    utterance.rate =
-        Number(speed.value);
-
-    utterance.pitch =
-        Number(pitch.value);
-
-    utterance.volume = 1;
-
-
-    const voices =
-        speechSynthesis.getVoices();
-
-
-    const spanishVoices =
-        voices.filter(
-            v =>
-                v.lang
-                .toLowerCase()
-                .startsWith("es")
-        );
-
-
-    if(spanishVoices.length){
-
-        let selected =
-            spanishVoices[
-                Number(voiceSelect.value)
-            ];
-
-        if(!selected){
-
-            selected =
-                spanishVoices[0];
         }
 
-        utterance.voice =
-            selected;
-    }
+        try{
+
+            recognition.start();
+
+        }catch(error){
+
+            console.log(error);
+
+        }
+
+    };
 
 
-    utterance.onstart =
-        function(){
+/* ============================================================
+   ENVIAR MENSAJE
+   ============================================================ */
 
-            speaking = true;
+window.sendMessage =
+    async function(){
 
-            micText.textContent =
-                "SPEAKING...";
-
-            micButton.classList.add(
-                "speaking"
+        const input =
+            document.getElementById(
+                "message"
             );
 
-            core.classList.add(
-                "active"
+        const message =
+            input.value.trim();
+
+        if(!message)
+            return;
+
+        input.value = "";
+
+        coreStatus.innerText =
+            "THINKING";
+
+        voiceStatus.innerText =
+            "JARVIS THINKING...";
+
+        addLog(
+            "User: " + message
+        );
+
+
+        try{
+
+            const response =
+                await fetch(
+                    "/chat",
+                    {
+                        method:"POST",
+
+                        headers:{
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body:JSON.stringify({
+                            message:message
+                        })
+                    }
+                );
+
+
+            const data =
+                await response.json();
+
+
+            if(data.error){
+
+                throw new Error(
+                    data.error
+                );
+
+            }
+
+
+            const answer =
+                data.response;
+
+
+            addLog(
+                "JARVIS: " + answer
             );
 
-            logLine(
-                "AUDIO OUTPUT // SPEAKING"
-            );
-        };
+
+            document.getElementById(
+                "terminal"
+            ).innerHTML +=
+                "<br>JARVIS > " +
+                escapeHtml(answer);
 
 
-    utterance.onend =
-        function(){
-
-            speaking = false;
-
-            micButton.classList.remove(
-                "speaking"
-            );
-
-            core.classList.remove(
-                "active"
-            );
-
-            micText.textContent =
-                "AWAITING COMMAND...";
-
-            logLine(
-                "AUDIO OUTPUT // COMPLETE"
-            );
-        };
+            await speakJarvis(answer);
 
 
-    utterance.onerror =
-        function(){
+        }catch(error){
 
-            speaking = false;
+            console.error(error);
 
-            micButton.classList.remove(
-                "speaking"
+            coreStatus.innerText =
+                "SYSTEM ERROR";
+
+            voiceStatus.innerText =
+                "CONNECTION ERROR";
+
+            addLog(
+                "ERROR: " +
+                error.message
             );
 
-            micText.textContent =
-                "AWAITING COMMAND...";
+        }
 
-            logLine(
-                "AUDIO OUTPUT // ERROR"
-            );
-        };
+    };
 
 
-    speechSynthesis.speak(
-        utterance
-    );
-}
-
-
-/* =========================
-   CHAT
-========================= */
+/* ============================================================
+   ENTER
+   ============================================================ */
 
 document
-.getElementById("message")
-.addEventListener(
-    "keydown",
-    function(e){
+    .getElementById("message")
+    .addEventListener(
+        "keydown",
+        function(event){
 
-        if(e.key === "Enter"){
+            if(event.key === "Enter"){
 
-            sendMessage();
+                sendMessage();
+
+            }
 
         }
-    }
-);
-
-
-/* =========================
-   SEND TO OPENROUTER
-========================= */
-
-async function sendMessage(){
-
-    const input =
-        document.getElementById(
-            "message"
-        );
-
-    const response =
-        document.getElementById(
-            "response"
-        );
-
-    const msg =
-        input.value.trim();
-
-
-    if(!msg)
-        return;
-
-
-    micText.textContent =
-        "THINKING...";
-
-    response.textContent =
-        "JARVIS // THINKING...";
-
-    core.classList.add("active");
-
-
-    logLine(
-        "JARVIS // PROCESSING COMMAND"
     );
 
 
-    input.value = "";
+/* ============================================================
+   FOCUS
+   ============================================================ */
+
+window.focusChat =
+    function(){
+
+        document
+            .getElementById("message")
+            .focus();
+
+    };
 
 
-    try{
+/* ============================================================
+   LOG
+   ============================================================ */
 
-        const r =
-            await fetch(
-                "/chat",
-                {
-                    method:"POST",
+function addLog(text){
 
-                    headers:{
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body:
-                        JSON.stringify({
-                            message:msg
-                        })
-                }
-            );
-
-
-        const data =
-            await r.json();
-
-
-        const answer =
-            data.response ||
-            data.error ||
-            "No response";
-
-
-        response.textContent =
-            answer;
-
-
-        logLine(
-            "JARVIS // RESPONSE READY"
+    const log =
+        document.getElementById(
+            "liveLog"
         );
 
+    const item =
+        document.createElement("div");
 
-        if(data.response){
+    item.innerText =
+        "> " + text;
 
-            speakJarvis(
-                data.response
-            );
+    log.prepend(item);
 
-        }else{
+    while(log.children.length > 8){
 
-            resetMic();
-
-        }
-
-
-    }catch(error){
-
-        response.textContent =
-            "COMMUNICATION ERROR";
-
-        micText.textContent =
-            "CONNECTION ERROR";
-
-        core.classList.remove(
-            "active"
+        log.removeChild(
+            log.lastChild
         );
 
-        logLine(
-            "JARVIS // CONNECTION ERROR"
-        );
-
-        setTimeout(
-            resetMic,
-            2000
-        );
     }
+
 }
 
+
+/* ============================================================
+   ESCAPE HTML
+   ============================================================ */
+
+function escapeHtml(text){
+
+    return text
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;");
+
+}
+
+
+/* ============================================================
+   CARGAR VOZ
+   ============================================================ */
+
+loadKokoro();
+
+
+/* ============================================================
+   SPLASH
+   ============================================================ */
+
+let progress = 0;
+
+const interval =
+    setInterval(
+        function(){
+
+            progress += 2;
+
+            document
+                .getElementById(
+                    "progressBar"
+                )
+                .style.width =
+                progress + "%";
+
+
+            if(progress >= 100){
+
+                clearInterval(interval);
+
+                setTimeout(
+                    function(){
+
+                        document
+                            .getElementById(
+                                "splash"
+                            )
+                            .style.display =
+                            "none";
+
+                        document
+                            .getElementById(
+                                "app"
+                            )
+                            .style.display =
+                            "block";
+
+                    },
+                    500
+                );
+
+            }
+
+        },
+        25
+    );
+
+
+/* ============================================================
+   RELOJ
+   ============================================================ */
+
+setInterval(
+    function(){
+
+        const now =
+            new Date();
+
+        document.title =
+            "J.A.R.V.I.S // " +
+            now.toLocaleTimeString();
+
+    },
+    1000
+);
+
+
+/* ============================================================
+   SIMULACIÓN DE SISTEMA
+   ============================================================ */
+
+setInterval(
+    function(){
+
+        const cpu =
+            Math.floor(
+                25 + Math.random()*30
+            );
+
+        const memory =
+            Math.floor(
+                40 + Math.random()*20
+            );
+
+
+        document.getElementById(
+            "cpu"
+        ).innerText =
+            cpu + "%";
+
+
+        document.getElementById(
+            "cpuBar"
+        ).style.width =
+            cpu + "%";
+
+
+        document.getElementById(
+            "memory"
+        ).innerText =
+            memory + "%";
+
+
+        document.getElementById(
+            "memoryBar"
+        ).style.width =
+            memory + "%";
+
+    },
+    2000
+);
+
 </script>
+
 
 </body>
 </html>
 """
 
 
+# ============================================================
+# RUTA PRINCIPAL
+# ============================================================
+
 @app.route("/")
 def home():
+
     return render_template_string(HTML)
 
+
+# ============================================================
+# CHAT — OPENROUTER
+# ============================================================
 
 @app.route("/chat", methods=["POST"])
 def chat():
 
-    data = request.get_json() or {}
-
-    message = data.get(
-        "message",
-        ""
-    ).strip()
-
-    if not message:
-
-        return jsonify({
-            "error":
-            "No se recibió ningún mensaje"
-        }), 400
-
     try:
 
+        data = request.get_json()
+
+        message = data.get("message", "").strip()
+
+        if not message:
+
+            return jsonify({
+                "error":"Mensaje vacío"
+            }),400
+
+
         response = client.responses.create(
+
             model="openrouter/free",
+
             input=message
+
         )
 
+
         return jsonify({
-            "response":
-            response.output_text
+            "response":response.output_text
         })
+
 
     except Exception as e:
 
-        return jsonify({
-            "error":
-            str(e)
-        }), 500
+        print("CHAT ERROR:",e)
 
+        return jsonify({
+            "error":str(e)
+        }),500
+
+
+# ============================================================
+# SERVER
+# ============================================================
 
 if __name__ == "__main__":
 
@@ -1971,4 +1700,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=port
-    )
+)
