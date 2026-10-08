@@ -1,870 +1,5655 @@
-import os,json,sqlite3,urllib.parse,urllib.request,re
-from flask import Flask,request,jsonify,Response
+import os
+import re
+import json
+import sqlite3
+import urllib.parse
+import urllib.request
+import urllib.error
+import threading
+import time
+from datetime import datetime
+
+from flask import Flask, request, jsonify, Response
+
 from openai import OpenAI
 
-app=Flask(__name__)
-DB="jarvis_memory.db"
 
-ai=OpenAI(
-    api_key=os.environ.get("OPENROUTER_API_KEY"),
+# ============================================================
+# J.A.R.V.I.S. COMMAND CENTER
+# ALL-IN-ONE SERVER
+# Brain + Memory + Web + Voice UI + Agents + Tools
+# Gmail/WhatsApp integration points included
+# ============================================================
+
+app = Flask(__name__)
+
+PORT = int(os.environ.get("PORT", "8000"))
+
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+
+ai = OpenAI(
+    api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1"
 )
 
-# ================= MEMORIA =================
+DB_FILE = "jarvis_memory.db"
 
-def database():
-    c=sqlite3.connect(DB)
-    c.execute("CREATE TABLE IF NOT EXISTS memory(id INTEGER PRIMARY KEY AUTOINCREMENT,text TEXT)")
-    c.commit()
-    return c
 
-def save_memory(text):
-    c=database()
-    c.execute("INSERT INTO memory(text) VALUES(?)",(text,))
-    c.commit()
-    c.close()
+# ============================================================
+# DATABASE / MEMORY
+# ============================================================
 
-def get_memory():
-    c=database()
-    r=c.execute("SELECT text FROM memory ORDER BY id DESC LIMIT 40").fetchall()
-    c.close()
-    return [x[0] for x in r]
+def db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-# ================= WEB =================
 
-def search_web(query):
-    try:
-        url="https://html.duckduckgo.com/html/?q="+urllib.parse.quote(query)
-        req=urllib.request.Request(
-            url,
-            headers={"User-Agent":"Mozilla/5.0"}
+def init_db():
+    conn = db()
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
-        page=urllib.request.urlopen(req,timeout=10).read().decode("utf-8","ignore")
+    """)
 
-        results=[]
-        pattern=r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>'
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
 
-        for m in re.finditer(pattern,page,re.S):
-            link=m.group(1)
-            title=re.sub("<.*?>","",m.group(2))
-            title=title.replace("&amp;","&").strip()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL
+        )
+    """)
 
-            if title and link:
-                results.append({
-                    "title":title,
-                    "url":link
-                })
+    conn.commit()
+    conn.close()
 
-            if len(results)>=6:
-                break
+
+init_db()
+
+
+def save_memory(content):
+    conn = db()
+    conn.execute(
+        "INSERT INTO memories(content, created_at) VALUES (?, ?)",
+        (content, datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_memories(limit=30):
+    conn = db()
+    rows = conn.execute(
+        "SELECT content, created_at FROM memories ORDER BY id DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    conn.close()
+    return list(rows)
+
+
+def save_conversation(role, content):
+    conn = db()
+    conn.execute(
+        "INSERT INTO conversations(role, content, created_at) VALUES (?, ?, ?)",
+        (role, content, datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# WEB SEARCH
+# ============================================================
+
+def search_web(query, max_results=6):
+    """
+    Basic internet search using DuckDuckGo HTML.
+    No additional Python package required.
+    """
+
+    try:
+        encoded = urllib.parse.quote_plus(query)
+
+        url = (
+            "https://html.duckduckgo.com/html/"
+            "?q=" + encoded
+        )
+
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent":
+                "Mozilla/5.0 (Linux; Android 14) "
+                "AppleWebKit/537.36 "
+                "Chrome/120 Mobile Safari/537.36"
+            }
+        )
+
+        with urllib.request.urlopen(req, timeout=12) as response:
+            html = response.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+        results = []
+
+        blocks = re.findall(
+            r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+            html,
+            re.I | re.S
+        )
+
+        for link, title in blocks[:max_results]:
+            title = re.sub("<.*?>", "", title)
+            title = title.replace("&amp;", "&")
+
+            if link.startswith("//"):
+                link = "https:" + link
+
+            results.append({
+                "title": title.strip(),
+                "url": link.strip()
+            })
 
         return results
-    except:
-        return []
 
-# ================= PWA =================
-
-@app.route("/manifest.json")
-def manifest():
-    return Response(json.dumps({
-        "name":"J.A.R.V.I.S.",
-        "short_name":"JARVIS",
-        "description":"Just A Rather Very Intelligent System",
-        "start_url":"/",
-        "scope":"/",
-        "display":"standalone",
-        "background_color":"#05080e",
-        "theme_color":"#22d3ee",
-        "orientation":"portrait",
-        "icons":[{
-            "src":"/icon.svg",
-            "sizes":"any",
-            "type":"image/svg+xml",
-            "purpose":"any maskable"
+    except Exception as e:
+        return [{
+            "title": "Web search error",
+            "url": "",
+            "error": str(e)
         }]
-    }),mimetype="application/manifest+json")
 
-@app.route("/icon.svg")
-def icon():
-    return Response("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-<rect width="512" height="512" rx="90" fill="#05080e"/>
-<circle cx="256" cy="256" r="205" fill="none" stroke="#22d3ee" stroke-width="7"/>
-<circle cx="256" cy="256" r="170" fill="none" stroke="#22d3ee" stroke-width="2" opacity=".5"/>
-<path d="M256 75L437 256 256 437 75 256Z" fill="none" stroke="#22d3ee" stroke-width="8"/>
-<circle cx="256" cy="256" r="82" fill="#062431" stroke="#b9f8ff" stroke-width="6"/>
-<text x="256" y="283" text-anchor="middle" font-family="Arial" font-size="82" font-weight="bold" fill="#d6fbff">J</text>
-</svg>""",mimetype="image/svg+xml")
 
-@app.route("/service-worker.js")
-def service_worker():
-    return Response("""const CACHE="JARVIS-V3";
-self.addEventListener("install",e=>{
- e.waitUntil(caches.open(CACHE).then(c=>c.addAll(["/","/manifest.json","/icon.svg"])));
- self.skipWaiting();
-});
-self.addEventListener("activate",e=>{
- e.waitUntil(self.clients.claim());
-});
-self.addEventListener("fetch",e=>{
- if(e.request.method==="GET"){
-  e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));
- }
-});
-""",mimetype="application/javascript")
+def format_search_results(results):
+    if not results:
+        return "No se encontraron resultados."
 
-# ================= CEREBRO =================
+    text = []
 
-@app.route("/chat",methods=["POST"])
-def chat():
-    data=request.get_json(force=True)
-    message=str(data.get("message","")).strip()
+    for i, result in enumerate(results, 1):
+        text.append(
+            f"{i}. {result.get('title', '')}\n"
+            f"{result.get('url', '')}"
+        )
 
-    if not message:
-        return jsonify({"reply":"Te escucho."})
+    return "\n\n".join(text)
 
-    low=message.lower()
 
-    # MEMORIA
-    if re.match(r"^(recuerda|recuerda que|guarda|guarda que)\b",low):
-        text=re.sub(
-            r"^(recuerda|recuerda que|guarda|guarda que)\s*",
+def needs_web_search(message):
+    words = [
+        "busca",
+        "buscar",
+        "búscame",
+        "buscame",
+        "investiga",
+        "internet",
+        "en la web",
+        "web",
+        "noticias",
+        "últimas noticias",
+        "ultimas noticias",
+        "qué pasó hoy",
+        "que paso hoy",
+        "actualmente",
+        "ahora mismo",
+        "precio actual",
+        "información actual",
+        "informacion actual"
+    ]
+
+    msg = message.lower()
+
+    return any(word in msg for word in words)
+
+
+def extract_search_query(message):
+    patterns = [
+        r"búscame\s+(.+)",
+        r"buscame\s+(.+)",
+        r"busca\s+(.+)",
+        r"buscar\s+(.+)",
+        r"investiga\s+(.+)",
+        r"noticias\s+(?:sobre\s+)?(.+)",
+        r"qué pasó hoy\s+(.+)",
+        r"que paso hoy\s+(.+)"
+    ]
+
+    for pattern in patterns:
+        match = re.search(
+            pattern,
+            message,
+            re.I
+        )
+
+        if match:
+            return match.group(1).strip()
+
+    return message
+
+
+# ============================================================
+# MEMORY COMMANDS
+# ============================================================
+
+def is_memory_command(message):
+    msg = message.lower().strip()
+
+    starts = [
+        "recuerda ",
+        "recuerda que ",
+        "guarda ",
+        "guarda que ",
+        "memoriza ",
+        "memoriza que "
+    ]
+
+    return any(msg.startswith(x) for x in starts)
+
+
+def extract_memory(message):
+    msg = message.strip()
+
+    patterns = [
+        r"^recuerda\s+que\s+(.+)$",
+        r"^recuerda\s+(.+)$",
+        r"^guarda\s+que\s+(.+)$",
+        r"^guarda\s+(.+)$",
+        r"^memoriza\s+que\s+(.+)$",
+        r"^memoriza\s+(.+)$"
+    ]
+
+    for pattern in patterns:
+        match = re.match(
+            pattern,
+            msg,
+            re.I
+        )
+
+        if match:
+            return match.group(1).strip()
+
+    return msg
+
+
+# ============================================================
+# TASK SYSTEM
+# ============================================================
+
+def create_task(title):
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO tasks(title,status,created_at)
+        VALUES (?, 'pending', ?)
+        """,
+        (title, datetime.utcnow().isoformat())
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def get_tasks():
+    conn = db()
+
+    rows = conn.execute(
+        """
+        SELECT id,title,status,created_at
+        FROM tasks
+        ORDER BY id DESC
+        LIMIT 20
+        """
+    ).fetchall()
+
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+
+# ============================================================
+# AGENT SYSTEM
+# ============================================================
+
+AGENTS = {
+    "Coding Agent": {
+        "icon": "⌘",
+        "color": "cyan",
+        "status": "active"
+    },
+    "Research Agent": {
+        "icon": "◉",
+        "color": "blue",
+        "status": "active"
+    },
+    "Browser Agent": {
+        "icon": "◎",
+        "color": "purple",
+        "status": "active"
+    },
+    "Memory Agent": {
+        "icon": "◇",
+        "color": "green",
+        "status": "active"
+    },
+    "Task Agent": {
+        "icon": "✓",
+        "color": "orange",
+        "status": "active"
+    },
+    "System Agent": {
+        "icon": "⚙",
+        "color": "red",
+        "status": "active"
+    }
+}
+
+
+# ============================================================
+# TOOL / HAND SYSTEM
+# ============================================================
+
+def detect_tool_command(message):
+
+    msg = message.lower().strip()
+
+    if msg.startswith("crea una tarea"):
+        return "task"
+
+    if msg.startswith("crear una tarea"):
+        return "task"
+
+    if msg.startswith("nueva tarea"):
+        return "task"
+
+    if "qué tareas tengo" in msg:
+        return "tasks"
+
+    if "que tareas tengo" in msg:
+        return "tasks"
+
+    if "mis tareas" in msg:
+        return "tasks"
+
+    if "abre calendario" in msg:
+        return "calendar"
+
+    if "abrir calendario" in msg:
+        return "calendar"
+
+    if "nuevo chat" in msg:
+        return "chat"
+
+    return None
+
+
+def execute_tool(message):
+
+    tool = detect_tool_command(message)
+
+    if tool == "task":
+
+        title = re.sub(
+            r"^(crea una tarea|crear una tarea|nueva tarea)\s*",
             "",
             message,
             flags=re.I
+        ).strip()
+
+        if not title:
+            title = "Nueva tarea"
+
+        create_task(title)
+
+        return {
+            "tool": "Task Agent",
+            "success": True,
+            "message":
+                f"Tarea creada: {title}"
+        }
+
+    if tool == "tasks":
+
+        tasks = get_tasks()
+
+        if not tasks:
+            return {
+                "tool": "Task Agent",
+                "success": True,
+                "message":
+                    "No tienes tareas pendientes."
+            }
+
+        lines = []
+
+        for task in tasks:
+            lines.append(
+                f"• {task['title']} — {task['status']}"
+            )
+
+        return {
+            "tool": "Task Agent",
+            "success": True,
+            "message":
+                "Estas son tus tareas:\n" +
+                "\n".join(lines)
+        }
+
+    if tool == "calendar":
+
+        return {
+            "tool": "Browser Agent",
+            "success": True,
+            "message":
+                "El módulo de calendario está preparado. "
+                "La conexión con tu calendario se agregará "
+                "en la siguiente capa de herramientas."
+        }
+
+    if tool == "chat":
+
+        return {
+            "tool": "System Agent",
+            "success": True,
+            "message":
+                "Nuevo canal de conversación preparado."
+        }
+
+    return None
+
+
+# ============================================================
+# WHATSAPP CONFIGURATION
+# ============================================================
+
+WHATSAPP_TOKEN = os.environ.get(
+    "WHATSAPP_TOKEN",
+    ""
+)
+
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get(
+    "WHATSAPP_PHONE_NUMBER_ID",
+    ""
+)
+
+WHATSAPP_VERIFY_TOKEN = os.environ.get(
+    "WHATSAPP_VERIFY_TOKEN",
+    "jarvis_verify"
+)
+
+
+def whatsapp_available():
+    return bool(
+        WHATSAPP_TOKEN and
+        WHATSAPP_PHONE_NUMBER_ID
+    )
+
+
+def send_whatsapp_message(to, message):
+
+    if not whatsapp_available():
+
+        return {
+            "success": False,
+            "error":
+                "WhatsApp todavía no está configurado."
+        }
+
+    url = (
+        "https://graph.facebook.com/v20.0/"
+        + WHATSAPP_PHONE_NUMBER_ID
+        + "/messages"
+    )
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {
+            "body": message
+        }
+    }
+
+    data = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization":
+                "Bearer " + WHATSAPP_TOKEN,
+            "Content-Type":
+                "application/json"
+        },
+        method="POST"
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            req,
+            timeout=15
+        ) as response:
+
+            body = response.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+            return {
+                "success": True,
+                "response": body
+            }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# ============================================================
+# WHATSAPP WEBHOOK
+# ============================================================
+
+@app.route(
+    "/whatsapp/webhook",
+    methods=["GET"]
+)
+def whatsapp_verify():
+
+    mode = request.args.get("hub.mode")
+    token = request.args.get(
+        "hub.verify_token"
+    )
+    challenge = request.args.get(
+        "hub.challenge"
+    )
+
+    if (
+        mode == "subscribe" and
+        token == WHATSAPP_VERIFY_TOKEN
+    ):
+        return Response(
+            challenge,
+            status=200
         )
-        if text:
-            save_memory(text)
-            return jsonify({"reply":"Entendido. Lo guardaré en mi memoria."})
 
-    if "qué recuerdas" in low or "que recuerdas" in low:
-        mem=get_memory()
-        if not mem:
-            return jsonify({"reply":"Todavía no tengo recuerdos guardados."})
-        return jsonify({
-            "reply":"Esto es lo que recuerdo:\n\n"+
-            "\n".join("• "+x for x in mem)
-        })
+    return Response(
+        "Verification failed",
+        status=403
+    )
 
-    # DETECTAR BÚSQUEDA
-    search_words=[
-        "busca ",
-        "buscar ",
-        "búscame ",
-        "investiga ",
-        "investigar ",
-        "noticias",
-        "qué pasó hoy",
-        "que paso hoy",
-        "últimas noticias",
-        "ultimas noticias",
-        "en internet",
-        "en la web",
-        "actualmente",
-        "ahora mismo",
-        "precio actual"
-    ]
 
-    use_web=any(x in low for x in search_words)
-    web=[]
+@app.route(
+    "/whatsapp/webhook",
+    methods=["POST"]
+)
+def whatsapp_webhook():
 
-    if use_web:
-        web=search_web(message)
+    data = request.get_json(
+        silent=True
+    ) or {}
 
-    mem=get_memory()
+    try:
 
-    memory_text="\n".join(
-        "• "+x for x in mem
-    ) if mem else "No hay recuerdos todavía."
+        entry = data.get(
+            "entry",
+            []
+        )
 
+        for item in entry:
+
+            changes = item.get(
+                "changes",
+                []
+            )
+
+            for change in changes:
+
+                value = change.get(
+                    "value",
+                    {}
+                )
+
+                messages = value.get(
+                    "messages",
+                    []
+                )
+
+                for msg in messages:
+
+                    sender = msg.get(
+                        "from"
+                    )
+
+                    msg_type = msg.get(
+                        "type"
+                    )
+
+                    if msg_type != "text":
+                        continue
+
+                    incoming = (
+                        msg.get("text", {})
+                        .get("body", "")
+                    )
+
+                    if not incoming:
+                        continue
+
+                    result = process_message(
+                        incoming,
+                        source="whatsapp"
+                    )
+
+                    answer = result.get(
+                        "reply",
+                        "No pude procesar el mensaje."
+                    )
+
+                    if sender:
+                        send_whatsapp_message(
+                            sender,
+                            answer
+                        )
+
+    except Exception as e:
+
+        print(
+            "WhatsApp webhook error:",
+            e
+        )
+
+    return jsonify({
+        "status": "received"
+    })
+
+
+# ============================================================
+# GMAIL CONNECTION POINT
+# ============================================================
+
+@app.route(
+    "/api/gmail/status",
+    methods=["GET"]
+)
+def gmail_status():
+
+    return jsonify({
+        "connected": False,
+        "message":
+            "Gmail connector preparado. "
+            "OAuth se configurará cuando conectemos la cuenta."
+    })
+
+
+# ============================================================
+# AI BRAIN
+# ============================================================
+
+def ask_brain(
+    message,
+    memory_text="",
     web_text=""
+):
 
-    if web:
-        web_text="\n\nRESULTADOS ENCONTRADOS EN INTERNET:\n"
-        for x in web:
-            web_text+=f"- {x['title']} | {x['url']}\n"
-
-    system=f"""
+    system_prompt = """
 Eres J.A.R.V.I.S., un asistente personal avanzado.
 
 Tu personalidad:
-- Inteligente.
-- Natural.
-- Educado.
-- Directo.
-- Útil.
-- Hablas español salvo que el usuario pida otro idioma.
+- inteligente
+- directo
+- natural
+- educado
+- eficiente
+- con estilo tecnológico elegante
+- habla español cuando el usuario habla español
 
-No inventes datos.
+No digas que tienes capacidades que realmente no tienes.
 
-MEMORIA DEL USUARIO:
-{memory_text}
+Tienes acceso a:
+1. Memoria local
+2. Búsqueda web proporcionada por el sistema
+3. Sistema de tareas
+4. Herramientas
+5. Agentes especializados
 
-{web_text}
+Si hay resultados web disponibles:
+- utilízalos
+- distingue hechos de incertidumbre
+- no inventes información
 
-Si existen resultados de internet, utilízalos para responder.
-Indica cuando una información procede de una búsqueda web.
+Si el usuario pide una acción que todavía no está conectada:
+- explica brevemente que el módulo está preparado
+- no afirmes que la acción ya ocurrió.
 
-Tu objetivo es ayudar al usuario y ejecutar tareas cuando las herramientas disponibles lo permitan.
+Responde de forma natural.
 """
 
-    try:
-        result=ai.responses.create(
-            model="openrouter/free",
-            input=system+"\n\nUSUARIO:\n"+message
+    context = ""
+
+    if memory_text:
+
+        context += (
+            "\nMEMORIA DEL USUARIO:\n"
+            + memory_text
         )
 
-        answer=getattr(result,"output_text",None)
+    if web_text:
 
-        if not answer:
-            answer=str(result)
+        context += (
+            "\n\nRESULTADOS DE INTERNET:\n"
+            + web_text
+        )
+
+    prompt = (
+        system_prompt
+        + context
+        + "\n\nMENSAJE DEL USUARIO:\n"
+        + message
+    )
+
+    try:
+
+        response = ai.responses.create(
+            model="openrouter/free",
+            input=prompt
+        )
+
+        return response.output_text
 
     except Exception as e:
-        answer="Mi conexión con el cerebro tuvo un problema: "+str(e)
+
+        print(
+            "AI ERROR:",
+            repr(e)
+        )
+
+        return (
+            "No pude comunicarme con mi núcleo "
+            "de inteligencia en este momento."
+        )
+
+
+# ============================================================
+# MESSAGE PROCESSOR
+# ============================================================
+
+def process_message(
+    message,
+    source="web"
+):
+
+    message = str(
+        message or ""
+    ).strip()
+
+    if not message:
+
+        return {
+            "reply":
+                "Estoy listo. ¿Qué necesitas?"
+        }
+
+    save_conversation(
+        "user",
+        message
+    )
+
+    # --------------------------------------------------------
+    # MEMORY
+    # --------------------------------------------------------
+
+    if is_memory_command(message):
+
+        memory = extract_memory(
+            message
+        )
+
+        save_memory(memory)
+
+        answer = (
+            "Entendido. Lo guardaré en mi memoria: "
+            + memory
+        )
+
+        save_conversation(
+            "assistant",
+            answer
+        )
+
+        return {
+            "reply": answer,
+            "agent": "Memory Agent"
+        }
+
+    # --------------------------------------------------------
+    # RECALL MEMORY
+    # --------------------------------------------------------
+
+    lower = message.lower()
+
+    if (
+        "qué recuerdas" in lower or
+        "que recuerdas" in lower or
+        "mis recuerdos" in lower or
+        "qué sabes de mí" in lower or
+        "que sabes de mi" in lower
+    ):
+
+        memories = get_memories()
+
+        if not memories:
+
+            answer = (
+                "Todavía no tengo recuerdos "
+                "guardados."
+            )
+
+        else:
+
+            answer = (
+                "Esto es lo que recuerdo:\n\n"
+                + "\n".join(
+                    "• " + row["content"]
+                    for row in memories
+                )
+            )
+
+        save_conversation(
+            "assistant",
+            answer
+        )
+
+        return {
+            "reply": answer,
+            "agent": "Memory Agent"
+        }
+
+    # --------------------------------------------------------
+    # TOOLS / HANDS
+    # --------------------------------------------------------
+
+    tool_result = execute_tool(
+        message
+    )
+
+    if tool_result:
+
+        answer = tool_result["message"]
+
+        save_conversation(
+            "assistant",
+            answer
+        )
+
+        return {
+            "reply": answer,
+            "agent": tool_result["tool"]
+        }
+
+    # --------------------------------------------------------
+    # WEB / EYES
+    # --------------------------------------------------------
+
+    web_results = []
+
+    if needs_web_search(message):
+
+        query = extract_search_query(
+            message
+        )
+
+        web_results = search_web(
+            query
+        )
+
+    web_text = format_search_results(
+        web_results
+    )
+
+    # --------------------------------------------------------
+    # MEMORY CONTEXT
+    # --------------------------------------------------------
+
+    memories = get_memories(
+        limit=20
+    )
+
+    memory_text = "\n".join(
+        "• " + row["content"]
+        for row in memories
+    )
+
+    # --------------------------------------------------------
+    # AI
+    # --------------------------------------------------------
+
+    answer = ask_brain(
+        message,
+        memory_text,
+        web_text
+    )
+
+    save_conversation(
+        "assistant",
+        answer
+    )
+
+    return {
+        "reply": answer,
+        "agent":
+            "Research Agent"
+            if web_results
+            else "AI Core",
+        "web_results":
+            web_results
+    }
+
+
+# ============================================================
+# API
+# ============================================================
+
+@app.route(
+    "/chat",
+    methods=["POST"]
+)
+def chat():
+
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    message = data.get(
+        "message",
+        ""
+    )
+
+    result = process_message(
+        message
+    )
+
+    return jsonify(result)
+
+
+@app.route(
+    "/api/tasks",
+    methods=["GET"]
+)
+def api_tasks():
+
+    return jsonify(
+        get_tasks()
+    )
+
+
+@app.route(
+    "/api/agents",
+    methods=["GET"]
+)
+def api_agents():
+
+    return jsonify(
+        AGENTS
+    )
+
+
+@app.route(
+    "/api/system",
+    methods=["GET"]
+)
+def api_system():
 
     return jsonify({
-        "reply":answer,
-        "web":web
+        "status": "optimal",
+        "brain": bool(
+            OPENROUTER_API_KEY
+        ),
+        "memory": True,
+        "web": True,
+        "voice": True,
+        "whatsapp":
+            whatsapp_available(),
+        "gmail": False,
+        "agents": len(AGENTS),
+        "time":
+            datetime.now().isoformat()
     })
 
-# ================= INTERFAZ =================
+
+# ============================================================
+# PWA MANIFEST
+# ============================================================
+
+@app.route(
+    "/manifest.json"
+)
+def manifest():
+
+    data = {
+        "name":
+            "J.A.R.V.I.S. Command Center",
+
+        "short_name":
+            "JARVIS",
+
+        "description":
+            "Personal AI Command Center",
+
+        "start_url":
+            "/",
+
+        "scope":
+            "/",
+
+        "display":
+            "standalone",
+
+        "background_color":
+            "#05080e",
+
+        "theme_color":
+            "#22d3ee",
+
+        "orientation":
+            "portrait",
+
+        "icons": [
+            {
+                "src":
+                    "/icon.svg",
+                "sizes":
+                    "any",
+                "type":
+                    "image/svg+xml",
+                "purpose":
+                    "any maskable"
+            }
+        ]
+    }
+
+    return jsonify(data)
+
+
+# ============================================================
+# ICON
+# ============================================================
+
+@app.route(
+    "/icon.svg"
+)
+def icon():
+
+    svg = """
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 512 512">
+
+<rect width="512"
+      height="512"
+      rx="100"
+      fill="#05080e"/>
+
+<circle cx="256"
+        cy="256"
+        r="205"
+        fill="none"
+        stroke="#22d3ee"
+        stroke-width="7"/>
+
+<circle cx="256"
+        cy="256"
+        r="170"
+        fill="none"
+        stroke="#22d3ee"
+        stroke-width="2"
+        opacity=".5"/>
+
+<path d="M256 90
+         L422 256
+         L256 422
+         L90 256 Z"
+      fill="none"
+      stroke="#22d3ee"
+      stroke-width="8"/>
+
+<circle cx="256"
+        cy="256"
+        r="82"
+        fill="#082331"
+        stroke="#a5f3fc"
+        stroke-width="6"/>
+
+<text x="256"
+      y="284"
+      text-anchor="middle"
+      font-family="Arial,sans-serif"
+      font-size="86"
+      font-weight="700"
+      fill="#e0fbff">J</text>
+
+</svg>
+"""
+
+    return Response(
+        svg,
+        mimetype="image/svg+xml"
+    )
+
+
+# ============================================================
+# SERVICE WORKER
+# ============================================================
+
+@app.route(
+    "/service-worker.js"
+)
+def service_worker():
+
+    js = """
+const CACHE_NAME = "jarvis-command-center-v1";
+
+const CORE = [
+    "/",
+    "/manifest.json",
+    "/icon.svg"
+];
+
+self.addEventListener(
+    "install",
+    event => {
+
+        event.waitUntil(
+            caches.open(CACHE_NAME)
+            .then(cache =>
+                cache.addAll(CORE)
+            )
+        );
+
+        self.skipWaiting();
+    }
+);
+
+self.addEventListener(
+    "activate",
+    event => {
+
+        event.waitUntil(
+            caches.keys()
+            .then(keys =>
+                Promise.all(
+                    keys
+                    .filter(k =>
+                        k !== CACHE_NAME
+                    )
+                    .map(k =>
+                        caches.delete(k)
+                    )
+                )
+            )
+        );
+
+        self.clients.claim();
+    }
+);
+
+self.addEventListener(
+    "fetch",
+    event => {
+
+        if (
+            event.request.method !== "GET"
+        ) {
+            return;
+        }
+
+        event.respondWith(
+            fetch(event.request)
+            .catch(() =>
+                caches.match(
+                    event.request
+                )
+            )
+        );
+    }
+);
+"""
+
+    return Response(
+        js,
+        mimetype="application/javascript"
+    )
+
+
+# ============================================================
+# MAIN COMMAND CENTER UI
+# ============================================================
 
 @app.route("/")
 def home():
-    return Response(r'''<!DOCTYPE html>
-<html lang="es">
+
+    html = r"""
+<!DOCTYPE html>
+<html lang="en">
+
 <head>
+
 <meta charset="UTF-8">
 
 <meta name="viewport"
-content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+      content="width=device-width,
+               initial-scale=1.0,
+               maximum-scale=1.0,
+               user-scalable=no">
 
-<meta name="theme-color" content="#0a0e17">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
+<title>J.A.R.V.I.S. Command Center</title>
 
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/icon.svg">
+<link rel="manifest"
+      href="/manifest.json">
 
-<title>J.A.R.V.I.S.</title>
+<meta name="theme-color"
+      content="#05080e">
+
+<meta name="mobile-web-app-capable"
+      content="yes">
+
+<meta name="apple-mobile-web-app-capable"
+      content="yes">
+
+<meta name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent">
+
+<link rel="icon"
+      href="/icon.svg">
+
+<link rel="preconnect"
+      href="https://fonts.googleapis.com">
+
+<link rel="preconnect"
+      href="https://fonts.gstatic.com"
+      crossorigin>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap"
+      rel="stylesheet">
+
 
 <style>
 
-*{
- box-sizing:border-box;
- -webkit-tap-highlight-color:transparent;
+/* =========================================================
+   CORE
+========================================================= */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
 }
 
-html,body{
- margin:0;
- width:100%;
- height:100%;
- overflow:hidden;
- background:#0a0e17;
- color:#c9fbff;
- font-family:Arial,Helvetica,sans-serif;
+:root {
+
+    --bg:
+        #05080e;
+
+    --bg2:
+        #0a0e1a;
+
+    --panel:
+        rgba(10,18,32,.72);
+
+    --cyan:
+        #22d3ee;
+
+    --cyan2:
+        #67e8f9;
+
+    --blue:
+        #3b82f6;
+
+    --green:
+        #34d399;
+
+    --purple:
+        #a78bfa;
+
+    --orange:
+        #f59e0b;
+
+    --red:
+        #fb7185;
+
+    --text:
+        #e5faff;
+
+    --muted:
+        #71869a;
+
+    --border:
+        rgba(34,211,238,.15);
+
+    --glow:
+        rgba(34,211,238,.35);
 }
 
-body{
- display:flex;
- justify-content:center;
- align-items:center;
+html,
+body {
+
+    width: 100%;
+    min-height: 100%;
+
+    background:
+        radial-gradient(
+            circle at 50% 20%,
+            rgba(0,220,255,.08),
+            transparent 35%
+        ),
+        linear-gradient(
+            135deg,
+            #05080e,
+            #0a0e1a 45%,
+            #0d1b2e
+        );
+
+    color: var(--text);
+
+    font-family:
+        Inter,
+        sans-serif;
+
+    overflow-x: hidden;
 }
 
-.hud{
- position:relative;
- width:100%;
- max-width:600px;
- height:100vh;
- overflow:hidden;
- background:
- radial-gradient(circle at center,
- #092a38 0%,
- #071923 22%,
- #0a0e17 55%,
- #03060b 100%);
- display:flex;
- justify-content:center;
- align-items:center;
+
+/* =========================================================
+   BACKGROUND CONSTELLATION
+========================================================= */
+
+body::before {
+
+    content: "";
+
+    position: fixed;
+
+    inset: 0;
+
+    pointer-events: none;
+
+    opacity: .28;
+
+    background-image:
+        radial-gradient(
+            circle,
+            rgba(34,211,238,.45)
+            1px,
+            transparent 1px
+        );
+
+    background-size:
+        55px 55px;
+
+    mask-image:
+        linear-gradient(
+            to bottom,
+            black,
+            transparent 90%
+        );
+
+    z-index: -2;
 }
 
-/* PARTÍCULAS */
+body::after {
 
-.particle{
- position:absolute;
- width:2px;
- height:2px;
- background:#22d3ee;
- border-radius:50%;
- box-shadow:0 0 8px #22d3ee;
- opacity:.6;
- animation:float 6s infinite ease-in-out;
+    content: "";
+
+    position: fixed;
+
+    inset: 0;
+
+    pointer-events: none;
+
+    background:
+        linear-gradient(
+            rgba(34,211,238,.025) 1px,
+            transparent 1px
+        ),
+        linear-gradient(
+            90deg,
+            rgba(34,211,238,.025) 1px,
+            transparent 1px
+        );
+
+    background-size:
+        80px 80px;
+
+    z-index: -1;
 }
 
-.p1{left:12%;top:20%;animation-delay:0s}
-.p2{left:82%;top:17%;animation-delay:1s}
-.p3{left:20%;top:73%;animation-delay:2s}
-.p4{left:76%;top:70%;animation-delay:3s}
-.p5{left:50%;top:10%;animation-delay:1.5s}
-.p6{left:8%;top:48%;animation-delay:2.5s}
-.p7{left:91%;top:45%;animation-delay:4s}
-.p8{left:37%;top:87%;animation-delay:3.5s}
-.p9{left:66%;top:88%;animation-delay:4.5s}
-.p10{left:30%;top:35%;animation-delay:5s}
 
-@keyframes float{
- 0%,100%{transform:translateY(0);opacity:.25}
- 50%{transform:translateY(-25px);opacity:1}
+/* =========================================================
+   APP
+========================================================= */
+
+.app {
+
+    display: flex;
+
+    min-height: 100vh;
+
+    padding-bottom: 115px;
 }
 
-/* ANILLOS */
 
-.ring{
- position:absolute;
- border-radius:50%;
- border:1px solid #22d3ee;
- box-shadow:
- 0 0 15px #22d3ee55,
- inset 0 0 15px #22d3ee22;
- pointer-events:none;
+/* =========================================================
+   SIDEBAR
+========================================================= */
+
+.sidebar {
+
+    position: fixed;
+
+    left: 0;
+    top: 0;
+    bottom: 0;
+
+    width: 245px;
+
+    padding: 24px 15px;
+
+    background:
+        rgba(4,9,17,.82);
+
+    backdrop-filter:
+        blur(25px);
+
+    border-right:
+        1px solid var(--border);
+
+    z-index: 50;
+
+    display: flex;
+
+    flex-direction: column;
 }
 
-.ring1{
- width:360px;
- height:360px;
- border-top-color:transparent;
- border-bottom-color:#22d3ee;
- animation:spin1 13s linear infinite;
+.logo {
+
+    padding:
+        5px 12px 25px;
 }
 
-.ring2{
- width:310px;
- height:310px;
- border-style:dashed;
- border-color:#22d3ee88;
- animation:spin2 9s linear infinite;
+.logo-title {
+
+    font-family:
+        Rajdhani,
+        sans-serif;
+
+    font-size: 30px;
+
+    font-weight: 700;
+
+    letter-spacing: 6px;
+
+    color: var(--cyan);
+
+    text-shadow:
+        0 0 20px
+        rgba(34,211,238,.7);
 }
 
-.ring3{
- width:440px;
- height:440px;
- border-color:#22d3ee44;
- border-left-color:#22d3ee;
- animation:spin1 22s linear infinite;
+.logo-sub {
+
+    font-size: 9px;
+
+    letter-spacing: 3px;
+
+    color: #607588;
+
+    margin-top: 2px;
 }
 
-.ring4{
- width:245px;
- height:245px;
- border-width:2px;
- border-right-color:transparent;
- animation:spin2 6s linear infinite;
+
+.nav {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: 5px;
 }
 
-.ring5{
- width:190px;
- height:190px;
- border-color:#22d3ee55;
- animation:spin1 4s linear infinite;
+.nav-item {
+
+    height: 43px;
+
+    border-radius: 11px;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 12px;
+
+    padding:
+        0 13px;
+
+    color: #7e94a8;
+
+    font-size: 12px;
+
+    font-weight: 500;
+
+    cursor: pointer;
+
+    transition:
+        .25s ease;
+
+    border:
+        1px solid transparent;
 }
 
-@keyframes spin1{
- from{transform:rotate(0deg)}
- to{transform:rotate(360deg)}
+.nav-item:hover {
+
+    color: var(--cyan2);
+
+    background:
+        rgba(34,211,238,.06);
+
+    transform:
+        translateX(2px);
 }
 
-@keyframes spin2{
- from{transform:rotate(360deg)}
- to{transform:rotate(0deg)}
+.nav-item.active {
+
+    color: var(--cyan2);
+
+    background:
+        linear-gradient(
+            90deg,
+            rgba(34,211,238,.15),
+            rgba(34,211,238,.04)
+        );
+
+    border-color:
+        rgba(34,211,238,.12);
+
+    box-shadow:
+        inset 3px 0 0 var(--cyan),
+        0 0 20px rgba(34,211,238,.05);
 }
 
-/* NÚCLEO */
+.nav-icon {
 
-.core{
- position:absolute;
- width:125px;
- height:125px;
- border-radius:50%;
- background:
- radial-gradient(circle,#153d4b 0%,#071923 55%,#02070b 100%);
- border:3px solid #22d3ee;
- box-shadow:
- 0 0 20px #22d3ee,
- 0 0 50px #22d3ee77,
- inset 0 0 30px #22d3ee55;
- display:flex;
- align-items:center;
- justify-content:center;
- z-index:5;
- animation:corePulse 2s ease-in-out infinite;
+    width: 19px;
+
+    text-align: center;
+
+    font-size: 16px;
 }
 
-.core:before{
- content:"";
- position:absolute;
- width:80px;
- height:80px;
- border-radius:50%;
- border:1px solid #8ef5ff;
- box-shadow:0 0 20px #22d3ee;
+
+/* =========================================================
+   VOICE STATUS
+========================================================= */
+
+.voice-status {
+
+    margin-top: auto;
+
+    padding: 14px;
+
+    border:
+        1px solid var(--border);
+
+    border-radius: 15px;
+
+    background:
+        rgba(10,20,34,.65);
+
+    box-shadow:
+        inset 0 0 25px
+        rgba(34,211,238,.025);
 }
 
-.core:after{
- content:"";
- position:absolute;
- width:15px;
- height:15px;
- border-radius:50%;
- background:#d9fcff;
- box-shadow:0 0 25px #22d3ee,0 0 50px #22d3ee;
+.voice-title {
+
+    color: #6f8799;
+
+    font-size: 9px;
+
+    letter-spacing: 2px;
+
+    margin-bottom: 10px;
 }
 
-.logo{
- position:relative;
- z-index:2;
- font-size:34px;
- font-weight:bold;
- color:#d9fcff;
- text-shadow:0 0 15px #22d3ee;
+.wave-mini {
+
+    height: 30px;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 3px;
+
+    overflow: hidden;
 }
 
-@keyframes corePulse{
- 0%,100%{
-  transform:scale(.94);
-  box-shadow:0 0 20px #22d3ee,0 0 50px #22d3ee55;
- }
- 50%{
-  transform:scale(1.05);
-  box-shadow:0 0 30px #22d3ee,0 0 90px #22d3ee88;
- }
+.wave-mini span {
+
+    width: 3px;
+
+    height: 10px;
+
+    border-radius: 5px;
+
+    background:
+        var(--cyan);
+
+    animation:
+        voiceWave .75s
+        ease-in-out
+        infinite
+        alternate;
+
+    box-shadow:
+        0 0 8px
+        var(--cyan);
 }
 
-/* ONDAS RADAR */
-
-.wave{
- position:absolute;
- width:125px;
- height:125px;
- border:2px solid #22d3ee;
- border-radius:50%;
- opacity:0;
- animation:wave 3s infinite;
+.wave-mini span:nth-child(2) {
+    animation-delay: .08s;
 }
 
-.wave2{animation-delay:1s}
-.wave3{animation-delay:2s}
-
-@keyframes wave{
- 0%{
-  transform:scale(1);
-  opacity:.7;
- }
- 100%{
-  transform:scale(3.4);
-  opacity:0;
- }
+.wave-mini span:nth-child(3) {
+    animation-delay: .16s;
 }
 
-/* LÍNEAS RADAR */
-
-.tick{
- position:absolute;
- width:2px;
- height:16px;
- background:#22d3ee;
- box-shadow:0 0 8px #22d3ee;
- opacity:.65;
+.wave-mini span:nth-child(4) {
+    animation-delay: .24s;
 }
 
-.t1{top:12%;left:50%}
-.t2{top:50%;left:8%;transform:rotate(90deg)}
-.t3{top:50%;right:8%;transform:rotate(90deg)}
-.t4{bottom:12%;left:50%}
-.t5{top:25%;left:22%;transform:rotate(-45deg)}
-.t6{top:25%;right:22%;transform:rotate(45deg)}
-.t7{bottom:25%;left:22%;transform:rotate(45deg)}
-.t8{bottom:25%;right:22%;transform:rotate(-45deg)}
-
-/* TEXTO */
-
-.status{
- position:absolute;
- bottom:135px;
- width:100%;
- text-align:center;
- color:#22d3ee;
- font-size:13px;
- letter-spacing:4px;
- text-shadow:0 0 12px #22d3ee;
- z-index:8;
+.wave-mini span:nth-child(5) {
+    animation-delay: .32s;
 }
 
-.substatus{
- position:absolute;
- top:35px;
- width:100%;
- text-align:center;
- font-size:11px;
- letter-spacing:3px;
- color:#7bdce8;
- opacity:.7;
+.wave-mini span:nth-child(6) {
+    animation-delay: .4s;
 }
 
-/* ECUALIZADOR */
-
-.equalizer{
- position:absolute;
- bottom:175px;
- display:flex;
- gap:5px;
- align-items:end;
- height:40px;
- z-index:8;
+.wave-mini span:nth-child(7) {
+    animation-delay: .48s;
 }
 
-.equalizer span{
- width:4px;
- height:7px;
- background:#22d3ee;
- box-shadow:0 0 9px #22d3ee;
- border-radius:3px;
+@keyframes voiceWave {
+
+    from {
+        height: 5px;
+        opacity: .35;
+    }
+
+    to {
+        height: 27px;
+        opacity: 1;
+    }
 }
 
-/* MIC */
+.voice-row {
 
-.mic{
- position:absolute;
- bottom:35px;
- width:76px;
- height:76px;
- border-radius:50%;
- border:2px solid #22d3ee;
- background:#06131c;
- color:#cfffff;
- font-size:31px;
- box-shadow:
- 0 0 15px #22d3ee88,
- inset 0 0 15px #22d3ee33;
- z-index:20;
- transition:.2s;
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    margin-top: 8px;
 }
 
-.mic:active{
- transform:scale(.9);
- box-shadow:
- 0 0 35px #22d3ee,
- inset 0 0 25px #22d3ee66;
+.listening {
+
+    font-size: 10px;
+
+    color: var(--green);
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 6px;
 }
 
-/* PANEL DE RESPUESTA */
+.dot {
 
-.response{
- position:absolute;
- top:62px;
- left:20px;
- right:20px;
- max-height:115px;
- overflow:auto;
- color:#a9f4ff;
- font-size:12px;
- line-height:1.45;
- text-shadow:0 0 8px #22d3ee55;
- z-index:10;
- scrollbar-width:none;
+    width: 7px;
+    height: 7px;
+
+    border-radius: 50%;
+
+    background:
+        var(--green);
+
+    box-shadow:
+        0 0 12px
+        var(--green);
+
+    animation:
+        blink 1.5s
+        infinite;
 }
 
-.response::-webkit-scrollbar{
- display:none;
+@keyframes blink {
+
+    0%,100% {
+        opacity: .4;
+    }
+
+    50% {
+        opacity: 1;
+    }
 }
 
-/* ESCUCHANDO */
+.pause-btn {
 
-.listening .ring1{
- animation-duration:4s;
+    background:
+        rgba(255,255,255,.04);
+
+    color: #708496;
+
+    border:
+        1px solid rgba(255,255,255,.07);
+
+    border-radius: 7px;
+
+    padding:
+        5px 8px;
+
+    font-size: 9px;
+
+    cursor: pointer;
 }
 
-.listening .ring2{
- animation-duration:2.5s;
+
+/* =========================================================
+   MAIN
+========================================================= */
+
+.main {
+
+    margin-left: 245px;
+
+    width: calc(100% - 245px);
+
+    padding:
+        20px 24px 40px;
 }
 
-.listening .ring3{
- animation-duration:7s;
+
+/* =========================================================
+   HEADER
+========================================================= */
+
+.header {
+
+    height: 58px;
+
+    display: grid;
+
+    grid-template-columns:
+        1fr auto 1fr;
+
+    align-items: center;
+
+    gap: 20px;
+
+    margin-bottom: 20px;
 }
 
-.listening .ring4{
- animation-duration:2s;
+.search {
+
+    height: 38px;
+
+    max-width: 390px;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 10px;
+
+    padding:
+        0 14px;
+
+    border:
+        1px solid rgba(34,211,238,.1);
+
+    border-radius: 10px;
+
+    background:
+        rgba(9,18,30,.55);
+
+    color: #657d90;
 }
 
-.listening .wave{
- animation-duration:1.4s;
+.search input {
+
+    width: 100%;
+
+    border: none;
+
+    outline: none;
+
+    background: none;
+
+    color: var(--text);
+
+    font-size: 11px;
 }
 
-.listening .mic{
- box-shadow:
- 0 0 30px #22d3ee,
- 0 0 70px #22d3ee88,
- inset 0 0 25px #22d3ee66;
+.search input::placeholder {
+    color: #506678;
 }
 
-.listening .status{
- color:#d9ffff;
+.time-center {
+
+    text-align: center;
+
+    white-space: nowrap;
+}
+
+.date {
+
+    font-size: 10px;
+
+    color: #6d8597;
+
+    letter-spacing: 1px;
+}
+
+.clock {
+
+    font-family:
+        Rajdhani,
+        sans-serif;
+
+    color: var(--cyan);
+
+    font-size: 22px;
+
+    font-weight: 600;
+
+    letter-spacing: 2px;
+
+    text-shadow:
+        0 0 15px
+        rgba(34,211,238,.35);
+}
+
+.header-right {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: flex-end;
+
+    gap: 12px;
+}
+
+.status {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 7px;
+
+    color: #7890a1;
+
+    font-size: 9px;
+
+    letter-spacing: 1px;
+}
+
+.util {
+
+    width: 34px;
+    height: 34px;
+
+    display: grid;
+
+    place-items: center;
+
+    border:
+        1px solid rgba(255,255,255,.06);
+
+    border-radius: 9px;
+
+    background:
+        rgba(255,255,255,.025);
+
+    color: #7890a1;
+
+    cursor: pointer;
+
+    transition: .2s;
+}
+
+.util:hover {
+
+    color: var(--cyan);
+
+    border-color:
+        rgba(34,211,238,.2);
+
+    box-shadow:
+        0 0 15px
+        rgba(34,211,238,.08);
+}
+
+.profile {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 8px;
+
+    font-size: 10px;
+
+    color: #8296a7;
+}
+
+.avatar {
+
+    width: 31px;
+    height: 31px;
+
+    border-radius: 50%;
+
+    display: grid;
+
+    place-items: center;
+
+    background:
+        linear-gradient(
+            135deg,
+            #113746,
+            #14263b
+        );
+
+    border:
+        1px solid
+        rgba(34,211,238,.3);
+
+    color: var(--cyan);
+}
+
+
+/* =========================================================
+   PANEL
+========================================================= */
+
+.panel {
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(12,23,39,.78),
+            rgba(5,13,24,.62)
+        );
+
+    border:
+        1px solid var(--border);
+
+    border-radius: 17px;
+
+    backdrop-filter:
+        blur(20px);
+
+    box-shadow:
+        inset 0 1px 0
+        rgba(255,255,255,.025),
+        0 10px 35px
+        rgba(0,0,0,.15);
+
+    transition:
+        transform .25s,
+        border-color .25s,
+        box-shadow .25s;
+
+    overflow: hidden;
+}
+
+.panel:hover {
+
+    transform:
+        translateY(-2px);
+
+    border-color:
+        rgba(34,211,238,.28);
+
+    box-shadow:
+        0 12px 40px
+        rgba(0,0,0,.25),
+        0 0 30px
+        rgba(34,211,238,.035);
+}
+
+.panel-title {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    padding:
+        16px 17px 10px;
+
+    color: #8da3b4;
+
+    font-size: 9px;
+
+    font-weight: 700;
+
+    letter-spacing: 1.8px;
+}
+
+.panel-title span:first-child {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 8px;
+}
+
+.panel-title-icon {
+
+    color: var(--cyan);
+
+    font-size: 13px;
+}
+
+.link {
+
+    color: var(--cyan);
+
+    font-size: 9px;
+
+    cursor: pointer;
+
+    text-decoration: none;
+}
+
+
+/* =========================================================
+   AI CORE
+========================================================= */
+
+.core-grid {
+
+    display:
+        grid;
+
+    grid-template-columns:
+        245px
+        minmax(350px,1fr)
+        280px;
+
+    gap: 16px;
+
+    min-height: 345px;
+}
+
+
+/* overview */
+
+.overview {
+
+    padding-bottom: 12px;
+}
+
+.metrics {
+
+    padding:
+        3px 17px;
+}
+
+.metric {
+
+    height: 47px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    border-bottom:
+        1px solid
+        rgba(255,255,255,.035);
+}
+
+.metric:last-child {
+    border-bottom: none;
+}
+
+.metric-left {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 9px;
+
+    color: #8398a8;
+
+    font-size: 11px;
+}
+
+.check {
+
+    width: 18px;
+    height: 18px;
+
+    border-radius: 50%;
+
+    display: grid;
+
+    place-items: center;
+
+    background:
+        rgba(52,211,153,.1);
+
+    border:
+        1px solid
+        rgba(52,211,153,.2);
+
+    color: var(--green);
+
+    font-size: 9px;
+}
+
+.online {
+
+    color: var(--green);
+
+    font-size: 8px;
+
+    letter-spacing: .5px;
+}
+
+
+/* =========================================================
+   CORE SPHERE
+========================================================= */
+
+.core-center {
+
+    position: relative;
+
+    display: grid;
+
+    place-items: center;
+
+    min-height: 345px;
+
+    overflow: hidden;
+
+    background:
+        radial-gradient(
+            circle at center,
+            rgba(34,211,238,.06),
+            transparent 48%
+        );
+}
+
+.core-label {
+
+    position: absolute;
+
+    top: 23px;
+
+    z-index: 4;
+
+    text-align: center;
+
+    pointer-events: none;
+}
+
+.core-label h1 {
+
+    font-family:
+        Rajdhani,
+        sans-serif;
+
+    font-size: 31px;
+
+    letter-spacing: 10px;
+
+    margin-left: 10px;
+
+    color: #dffcff;
+
+    text-shadow:
+        0 0 25px
+        rgba(34,211,238,.7);
+}
+
+.core-label p {
+
+    color: var(--cyan);
+
+    font-size: 8px;
+
+    letter-spacing: 3px;
+
+    margin-top: -2px;
+}
+
+.sphere {
+
+    position: relative;
+
+    width: 240px;
+    height: 240px;
+
+    border-radius: 50%;
+
+    transform-style:
+        preserve-3d;
+
+    animation:
+        sphereFloat 5s
+        ease-in-out
+        infinite;
+
+    filter:
+        drop-shadow(
+            0 0 28px
+            rgba(34,211,238,.23)
+        );
+}
+
+@keyframes sphereFloat {
+
+    0%,100% {
+        transform:
+            rotateX(8deg)
+            rotateY(-10deg)
+            translateY(0);
+    }
+
+    50% {
+        transform:
+            rotateX(-5deg)
+            rotateY(15deg)
+            translateY(-5px);
+    }
+}
+
+.sphere-ring {
+
+    position: absolute;
+
+    inset: 0;
+
+    border:
+        1px solid
+        rgba(34,211,238,.45);
+
+    border-radius: 50%;
+
+    box-shadow:
+        0 0 18px
+        rgba(34,211,238,.08);
+
+    animation:
+        rotateSphere 13s
+        linear
+        infinite;
+}
+
+.sphere-ring.r2 {
+
+    inset: 17px;
+
+    border-color:
+        rgba(59,130,246,.4);
+
+    animation-duration:
+        10s;
+
+    animation-direction:
+        reverse;
+}
+
+.sphere-ring.r3 {
+
+    inset: 35px;
+
+    border-color:
+        rgba(52,211,153,.28);
+
+    animation-duration:
+        8s;
+}
+
+.sphere-ring.r4 {
+
+    inset: 53px;
+
+    border-color:
+        rgba(167,139,250,.3);
+
+    animation-duration:
+        16s;
+
+    animation-direction:
+        reverse;
+}
+
+@keyframes rotateSphere {
+
+    from {
+        transform:
+            rotate(0deg)
+            rotateX(65deg);
+    }
+
+    to {
+        transform:
+            rotate(360deg)
+            rotateX(65deg);
+    }
+}
+
+.sphere-core {
+
+    position: absolute;
+
+    inset: 85px;
+
+    border-radius: 50%;
+
+    background:
+        radial-gradient(
+            circle at 35% 30%,
+            #67e8f9,
+            #0e6170 20%,
+            #062531 58%,
+            #03131c
+        );
+
+    box-shadow:
+        0 0 35px
+        rgba(34,211,238,.55),
+        inset 0 0 30px
+        rgba(34,211,238,.4);
+
+    animation:
+        corePulse 2.5s
+        ease-in-out
+        infinite;
+}
+
+@keyframes corePulse {
+
+    0%,100% {
+        transform: scale(.95);
+        opacity: .8;
+    }
+
+    50% {
+        transform: scale(1.08);
+        opacity: 1;
+    }
+}
+
+.sphere-dot {
+
+    position: absolute;
+
+    width: 4px;
+    height: 4px;
+
+    border-radius: 50%;
+
+    background:
+        var(--cyan);
+
+    box-shadow:
+        0 0 10px
+        var(--cyan);
+
+    animation:
+        dotPulse 1.8s
+        infinite;
+}
+
+.sphere-dot:nth-child(6) {
+    left: 20%;
+    top: 31%;
+}
+
+.sphere-dot:nth-child(7) {
+    right: 17%;
+    top: 28%;
+    animation-delay: .3s;
+}
+
+.sphere-dot:nth-child(8) {
+    left: 12%;
+    bottom: 28%;
+    animation-delay: .6s;
+}
+
+.sphere-dot:nth-child(9) {
+    right: 12%;
+    bottom: 26%;
+    animation-delay: .9s;
+}
+
+@keyframes dotPulse {
+
+    0%,100% {
+        transform: scale(.6);
+        opacity: .3;
+    }
+
+    50% {
+        transform: scale(1.6);
+        opacity: 1;
+    }
+}
+
+.node-line {
+
+    position: absolute;
+
+    width: 95px;
+    height: 1px;
+
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            var(--cyan)
+        );
+
+    opacity: .25;
+}
+
+.node-line.left {
+    left: 4%;
+}
+
+.node-line.right {
+
+    right: 4%;
+
+    transform:
+        rotate(180deg);
+}
+
+
+/* =========================================================
+   INTELLIGENCE
+========================================================= */
+
+.feed {
+
+    padding-bottom: 8px;
+}
+
+.feed-item {
+
+    display: grid;
+
+    grid-template-columns:
+        27px 1fr auto;
+
+    gap: 9px;
+
+    padding:
+        11px 15px;
+
+    border-top:
+        1px solid
+        rgba(255,255,255,.035);
+}
+
+.feed-icon {
+
+    width: 27px;
+    height: 27px;
+
+    display: grid;
+
+    place-items: center;
+
+    border-radius: 8px;
+
+    font-size: 11px;
+
+    background:
+        rgba(34,211,238,.07);
+
+    color:
+        var(--cyan);
+}
+
+.feed-icon.alert {
+
+    color: var(--red);
+
+    background:
+        rgba(251,113,133,.07);
+}
+
+.feed-text {
+
+    font-size: 9px;
+
+    line-height: 1.5;
+
+    color: #9aacb9;
+}
+
+.feed-time {
+
+    color: #52697a;
+
+    font-size: 8px;
+
+    white-space: nowrap;
+}
+
+
+/* =========================================================
+   MIDDLE ROW
+========================================================= */
+
+.middle-grid {
+
+    display:
+        grid;
+
+    grid-template-columns:
+        1.4fr
+        1fr
+        .8fr;
+
+    gap: 16px;
+
+    margin-top: 16px;
+}
+
+
+/* agents */
+
+.agent-grid {
+
+    display:
+        grid;
+
+    grid-template-columns:
+        repeat(3,1fr);
+
+    gap: 8px;
+
+    padding:
+        4px 13px 15px;
+}
+
+.agent {
+
+    min-height: 76px;
+
+    padding: 10px;
+
+    border-radius: 11px;
+
+    background:
+        rgba(255,255,255,.025);
+
+    border:
+        1px solid
+        rgba(255,255,255,.045);
+
+    transition: .2s;
+}
+
+.agent:hover {
+
+    background:
+        rgba(34,211,238,.045);
+
+    border-color:
+        rgba(34,211,238,.18);
+}
+
+.agent-icon {
+
+    font-size: 17px;
+
+    margin-bottom: 7px;
+}
+
+.agent-name {
+
+    color: #899dac;
+
+    font-size: 8px;
+
+    line-height: 1.3;
+}
+
+.agent-status {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 5px;
+
+    margin-top: 5px;
+
+    color: #607789;
+
+    font-size: 7px;
+}
+
+.agent-status .dot {
+
+    width: 5px;
+    height: 5px;
+}
+
+
+/* timeline */
+
+.timeline {
+
+    padding:
+        3px 16px 13px;
+}
+
+.timeline-item {
+
+    position: relative;
+
+    display: flex;
+
+    gap: 10px;
+
+    min-height: 42px;
+}
+
+.timeline-item:not(:last-child)::before {
+
+    content: "";
+
+    position: absolute;
+
+    left: 8px;
+
+    top: 17px;
+
+    bottom: 0;
+
+    width: 1px;
+
+    background:
+        rgba(34,211,238,.12);
+}
+
+.timeline-check {
+
+    position: relative;
+
+    z-index: 2;
+
+    width: 17px;
+    height: 17px;
+
+    flex-shrink: 0;
+
+    border-radius: 50%;
+
+    display: grid;
+
+    place-items: center;
+
+    border:
+        1px solid
+        rgba(34,211,238,.3);
+
+    color: var(--cyan);
+
+    font-size: 8px;
+
+    background:
+        #08131f;
+}
+
+.timeline-item.done
+.timeline-check {
+
+    background:
+        rgba(52,211,153,.1);
+
+    border-color:
+        rgba(52,211,153,.3);
+
+    color: var(--green);
+}
+
+.timeline-text {
+
+    color: #879ba9;
+
+    font-size: 9px;
+
+    padding-top: 2px;
+}
+
+.timeline-item.done
+.timeline-text {
+
+    color: #526778;
+
+    text-decoration:
+        line-through;
+}
+
+
+/* quick commands */
+
+.quick {
+
+    padding:
+        3px 13px 14px;
+}
+
+.quick-btn {
+
+    width: 100%;
+
+    height: 39px;
+
+    margin-bottom: 7px;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 10px;
+
+    border:
+        1px solid
+        rgba(255,255,255,.05);
+
+    border-radius: 9px;
+
+    background:
+        rgba(255,255,255,.025);
+
+    color: #8195a4;
+
+    font-size: 9px;
+
+    cursor: pointer;
+
+    transition: .2s;
+
+    padding:
+        0 11px;
+}
+
+.quick-btn:hover {
+
+    color: var(--cyan);
+
+    border-color:
+        rgba(34,211,238,.2);
+
+    background:
+        rgba(34,211,238,.04);
+}
+
+
+/* =========================================================
+   LOWER
+========================================================= */
+
+.bottom-grid {
+
+    display:
+        grid;
+
+    grid-template-columns:
+        1.2fr
+        .75fr
+        1fr;
+
+    gap: 16px;
+
+    margin-top: 16px;
+}
+
+
+/* gauges */
+
+.gauges {
+
+    display:
+        flex;
+
+    justify-content:
+        space-around;
+
+    padding:
+        7px 15px 19px;
+}
+
+.gauge {
+
+    text-align: center;
+}
+
+.gauge-ring {
+
+    --value: 75%;
+
+    width: 90px;
+    height: 90px;
+
+    position: relative;
+
+    display: grid;
+
+    place-items: center;
+
+    border-radius: 50%;
+
+    background:
+        conic-gradient(
+            var(--gauge-color)
+            var(--value),
+            rgba(255,255,255,.045)
+            0
+        );
+
+    box-shadow:
+        0 0 20px
+        color-mix(
+            in srgb,
+            var(--gauge-color),
+            transparent 75%
+        );
+}
+
+.gauge-ring::before {
+
+    content: "";
+
+    position: absolute;
+
+    inset: 7px;
+
+    border-radius: 50%;
+
+    background:
+        #09131f;
+
+    border:
+        1px solid
+        rgba(255,255,255,.04);
+}
+
+.gauge-value {
+
+    position: relative;
+
+    z-index: 2;
+
+    font-family:
+        Rajdhani,
+        sans-serif;
+
+    font-size: 19px;
+
+    color: #dffaff;
+}
+
+.gauge-label {
+
+    margin-top: 8px;
+
+    color: #647c8d;
+
+    font-size: 8px;
+
+    letter-spacing: 1px;
+}
+
+
+/* memory */
+
+.memory {
+
+    padding:
+        7px 18px 20px;
+}
+
+.memory-number {
+
+    font-family:
+        Rajdhani,
+        sans-serif;
+
+    font-size: 48px;
+
+    line-height: 1;
+
+    color: var(--cyan);
+
+    text-shadow:
+        0 0 25px
+        rgba(34,211,238,.25);
+}
+
+.memory-label {
+
+    color: #607789;
+
+    font-size: 8px;
+
+    letter-spacing: 1px;
+
+    margin-top: 3px;
+}
+
+.memory-secondary {
+
+    margin-top: 19px;
+
+    padding-top: 13px;
+
+    border-top:
+        1px solid
+        rgba(255,255,255,.05);
+
+    color: #8598a7;
+
+    font-size: 9px;
+}
+
+
+/* LLM */
+
+.providers {
+
+    display:
+        grid;
+
+    grid-template-columns:
+        repeat(3,1fr);
+
+    gap: 7px;
+
+    padding:
+        5px 14px 17px;
+}
+
+.provider {
+
+    padding: 9px;
+
+    border-radius: 9px;
+
+    background:
+        rgba(255,255,255,.025);
+
+    border:
+        1px solid
+        rgba(255,255,255,.04);
+}
+
+.provider-name {
+
+    color: #8296a6;
+
+    font-size: 8px;
+
+    white-space: nowrap;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+}
+
+.provider-status {
+
+    margin-top: 6px;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 5px;
+
+    font-size: 7px;
+
+    color: #607789;
+}
+
+
+/* =========================================================
+   CHAT PANEL
+========================================================= */
+
+.chat-panel {
+
+    position: fixed;
+
+    right: 20px;
+
+    bottom: 110px;
+
+    width: min(430px, calc(100vw - 30px));
+
+    max-height: 60vh;
+
+    display: none;
+
+    flex-direction: column;
+
+    z-index: 100;
+
+    background:
+        rgba(5,13,24,.94);
+
+    border:
+        1px solid
+        rgba(34,211,238,.24);
+
+    border-radius: 18px;
+
+    backdrop-filter:
+        blur(25px);
+
+    box-shadow:
+        0 20px 70px
+        rgba(0,0,0,.5),
+        0 0 35px
+        rgba(34,211,238,.07);
+}
+
+.chat-panel.open {
+
+    display: flex;
+}
+
+.chat-head {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    padding: 14px 16px;
+
+    border-bottom:
+        1px solid
+        rgba(255,255,255,.06);
+}
+
+.chat-head-title {
+
+    color: var(--cyan);
+
+    font-family:
+        Rajdhani,
+        sans-serif;
+
+    letter-spacing: 2px;
+
+    font-size: 14px;
+}
+
+.close-chat {
+
+    border: none;
+
+    background: none;
+
+    color: #718697;
+
+    font-size: 18px;
+
+    cursor: pointer;
+}
+
+.messages {
+
+    flex: 1;
+
+    overflow-y: auto;
+
+    padding: 15px;
+
+    min-height: 170px;
+
+    max-height: 42vh;
+}
+
+.message {
+
+    max-width: 88%;
+
+    padding: 10px 12px;
+
+    border-radius: 12px;
+
+    margin-bottom: 9px;
+
+    font-size: 10px;
+
+    line-height: 1.5;
+}
+
+.message.user {
+
+    margin-left: auto;
+
+    color: #d9fbff;
+
+    background:
+        rgba(34,211,238,.12);
+
+    border:
+        1px solid
+        rgba(34,211,238,.13);
+}
+
+.message.jarvis {
+
+    color: #9db1bf;
+
+    background:
+        rgba(255,255,255,.035);
+
+    border:
+        1px solid
+        rgba(255,255,255,.05);
+}
+
+.chat-input {
+
+    display: flex;
+
+    gap: 8px;
+
+    padding: 11px;
+
+    border-top:
+        1px solid
+        rgba(255,255,255,.06);
+}
+
+.chat-input input {
+
+    flex: 1;
+
+    height: 38px;
+
+    padding:
+        0 12px;
+
+    border:
+        1px solid
+        rgba(34,211,238,.12);
+
+    border-radius: 9px;
+
+    outline: none;
+
+    background:
+        rgba(255,255,255,.035);
+
+    color: white;
+
+    font-size: 10px;
+}
+
+.send {
+
+    width: 40px;
+
+    border: none;
+
+    border-radius: 9px;
+
+    background:
+        var(--cyan);
+
+    color:
+        #03222a;
+
+    cursor: pointer;
+
+    font-weight: 800;
+}
+
+
+/* =========================================================
+   BOTTOM TALK BAR
+========================================================= */
+
+.talkbar {
+
+    position: fixed;
+
+    left: 245px;
+    right: 0;
+    bottom: 0;
+
+    height: 92px;
+
+    z-index: 60;
+
+    display: flex;
+
+    justify-content: center;
+
+    align-items: center;
+
+    pointer-events: none;
+
+    background:
+        linear-gradient(
+            to top,
+            rgba(5,8,14,.96),
+            rgba(5,8,14,.7),
+            transparent
+        );
+}
+
+.talk-wrap {
+
+    position: relative;
+
+    pointer-events: auto;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 28px;
+}
+
+.audio-side {
+
+    width: 115px;
+
+    height: 35px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 3px;
+}
+
+.audio-side span {
+
+    width: 3px;
+
+    height: 8px;
+
+    border-radius: 3px;
+
+    background:
+        var(--cyan);
+
+    opacity: .5;
+
+    animation:
+        bottomWave .7s
+        ease-in-out
+        infinite
+        alternate;
+}
+
+.audio-side span:nth-child(2) {
+    animation-delay: .1s;
+}
+
+.audio-side span:nth-child(3) {
+    animation-delay: .2s;
+}
+
+.audio-side span:nth-child(4) {
+    animation-delay: .3s;
+}
+
+.audio-side span:nth-child(5) {
+    animation-delay: .4s;
+}
+
+@keyframes bottomWave {
+
+    from {
+        height: 5px;
+    }
+
+    to {
+        height: 27px;
+    }
+}
+
+.talk-button {
+
+    position: relative;
+
+    min-width: 225px;
+
+    height: 59px;
+
+    padding:
+        0 22px;
+
+    border-radius: 18px;
+
+    border:
+        1px solid
+        rgba(34,211,238,.42);
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(10,45,60,.9),
+            rgba(7,20,33,.95)
+        );
+
+    color: var(--cyan);
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 12px;
+
+    cursor: pointer;
+
+    box-shadow:
+        0 0 30px
+        rgba(34,211,238,.1),
+        inset 0 0 20px
+        rgba(34,211,238,.035);
+
+    transition: .25s;
+
+    animation:
+        talkGlow 2.3s
+        ease-in-out
+        infinite;
+}
+
+@keyframes talkGlow {
+
+    0%,100% {
+        box-shadow:
+            0 0 20px
+            rgba(34,211,238,.08);
+    }
+
+    50% {
+        box-shadow:
+            0 0 35px
+            rgba(34,211,238,.25);
+    }
+}
+
+.talk-button:hover {
+
+    transform:
+        translateY(-2px);
+
+    border-color:
+        rgba(34,211,238,.8);
+}
+
+.talk-button.listening {
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(0,125,145,.75),
+            rgba(7,30,43,.95)
+        );
+
+    box-shadow:
+        0 0 50px
+        rgba(34,211,238,.4);
+}
+
+.mic {
+
+    width: 35px;
+    height: 35px;
+
+    border-radius: 50%;
+
+    display: grid;
+
+    place-items: center;
+
+    background:
+        rgba(34,211,238,.1);
+
+    border:
+        1px solid
+        rgba(34,211,238,.25);
+
+    font-size: 16px;
+}
+
+.talk-text {
+
+    text-align: left;
+}
+
+.talk-main {
+
+    font-family:
+        Rajdhani,
+        sans-serif;
+
+    font-size: 14px;
+
+    font-weight: 700;
+
+    letter-spacing: 2px;
+}
+
+.talk-sub {
+
+    font-size: 8px;
+
+    color: #698192;
+
+    margin-top: 1px;
+}
+
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media (max-width: 1150px) {
+
+    .sidebar {
+        width: 210px;
+    }
+
+    .main {
+        margin-left: 210px;
+        width: calc(100% - 210px);
+    }
+
+    .talkbar {
+        left: 210px;
+    }
+
+    .core-grid {
+        grid-template-columns:
+            200px
+            minmax(280px,1fr)
+            230px;
+    }
+
+    .middle-grid {
+        grid-template-columns:
+            1fr 1fr;
+    }
+
+    .middle-grid .quick-panel {
+        grid-column: span 2;
+    }
+
+    .bottom-grid {
+        grid-template-columns:
+            1fr 1fr;
+    }
+
+    .bottom-grid .llm-panel {
+        grid-column: span 2;
+    }
+}
+
+@media (max-width: 850px) {
+
+    .sidebar {
+
+        width: 62px;
+
+        padding:
+            15px 8px;
+    }
+
+    .logo {
+        text-align: center;
+        padding:
+            8px 0 20px;
+    }
+
+    .logo-title {
+        font-size: 18px;
+        letter-spacing: 2px;
+    }
+
+    .logo-sub {
+        display: none;
+    }
+
+    .nav-item {
+        justify-content: center;
+        padding: 0;
+    }
+
+    .nav-item span:not(.nav-icon) {
+        display: none;
+    }
+
+    .voice-status {
+        display: none;
+    }
+
+    .main {
+
+        margin-left: 62px;
+
+        width:
+            calc(100% - 62px);
+
+        padding:
+            14px;
+    }
+
+    .talkbar {
+        left: 62px;
+    }
+
+    .header {
+
+        grid-template-columns:
+            1fr auto;
+
+        height: auto;
+    }
+
+    .search {
+        max-width: none;
+    }
+
+    .time-center {
+        display: none;
+    }
+
+    .header-right .status,
+    .header-right .profile {
+        display: none;
+    }
+
+    .core-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .core-center {
+        min-height: 380px;
+    }
+
+    .middle-grid,
+    .bottom-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .middle-grid .quick-panel,
+    .bottom-grid .llm-panel {
+        grid-column: auto;
+    }
+
+    .agent-grid {
+        grid-template-columns:
+            repeat(2,1fr);
+    }
+
+    .audio-side {
+        display: none;
+    }
+}
+
+@media (max-width: 520px) {
+
+    .header-right .util {
+        display: none;
+    }
+
+    .clock {
+        font-size: 18px;
+    }
+
+    .core-center {
+        min-height: 330px;
+    }
+
+    .sphere {
+        width: 205px;
+        height: 205px;
+    }
+
+    .sphere-core {
+        inset: 73px;
+    }
+
+    .talk-button {
+        min-width: 205px;
+    }
+
+    .gauge-ring {
+        width: 76px;
+        height: 76px;
+    }
 }
 
 </style>
+
 </head>
+
 
 <body>
 
-<div class="hud" id="hud">
 
-<div class="particle p1"></div>
-<div class="particle p2"></div>
-<div class="particle p3"></div>
-<div class="particle p4"></div>
-<div class="particle p5"></div>
-<div class="particle p6"></div>
-<div class="particle p7"></div>
-<div class="particle p8"></div>
-<div class="particle p9"></div>
-<div class="particle p10"></div>
+<div class="app">
 
-<div class="substatus">J.A.R.V.I.S. // ONLINE</div>
 
-<div class="response" id="response"></div>
+<!-- ======================================================
+     SIDEBAR
+====================================================== -->
 
-<div class="ring ring1"></div>
-<div class="ring ring2"></div>
-<div class="ring ring3"></div>
-<div class="ring ring4"></div>
-<div class="ring ring5"></div>
+<aside class="sidebar">
 
-<div class="tick t1"></div>
-<div class="tick t2"></div>
-<div class="tick t3"></div>
-<div class="tick t4"></div>
-<div class="tick t5"></div>
-<div class="tick t6"></div>
-<div class="tick t7"></div>
-<div class="tick t8"></div>
+    <div class="logo">
 
-<div class="wave"></div>
-<div class="wave wave2"></div>
-<div class="wave wave3"></div>
+        <div class="logo-title">
+            JARVIS
+        </div>
 
-<div class="core">
- <div class="logo">J</div>
+        <div class="logo-sub">
+            COMMAND CENTER
+        </div>
+
+    </div>
+
+
+    <nav class="nav">
+
+        <div class="nav-item active">
+            <span class="nav-icon">⌂</span>
+            <span>Command Center</span>
+        </div>
+
+        <div class="nav-item">
+            <span class="nav-icon">◉</span>
+            <span>AI Core</span>
+        </div>
+
+        <div class="nav-item">
+            <span class="nav-icon">◇</span>
+            <span>Agents</span>
+        </div>
+
+        <div class="nav-item">
+            <span class="nav-icon">✓</span>
+            <span>Tasks</span>
+        </div>
+
+        <div class="nav-item">
+            <span class="nav-icon">□</span>
+            <span>Calendar</span>
+        </div>
+
+        <div class="nav-item">
+            <span class="nav-icon">◈</span>
+            <span>Memory</span>
+        </div>
+
+        <div class="nav-item">
+            <span class="nav-icon">◌</span>
+            <span>Conversations</span>
+        </div>
+
+        <div class="nav-item">
+            <span class="nav-icon">▣</span>
+            <span>Knowledge Base</span>
+        </div>
+
+        <div class="nav-item">
+            <span class="nav-icon">⚙</span>
+            <span>Tools & Skills</span>
+        </div>
+
+    </nav>
+
+
+    <div class="voice-status">
+
+        <div class="voice-title">
+            VOICE STATUS
+        </div>
+
+        <div class="wave-mini">
+
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+
+        </div>
+
+        <div class="voice-row">
+
+            <div class="listening">
+
+                <span class="dot"></span>
+
+                <span>
+                    Listening
+                </span>
+
+            </div>
+
+            <button
+                class="pause-btn"
+                onclick="toggleVoice()">
+
+                Pause Mode
+
+            </button>
+
+        </div>
+
+    </div>
+
+</aside>
+
+
+
+<!-- ======================================================
+     MAIN
+====================================================== -->
+
+<main class="main">
+
+
+<header class="header">
+
+
+    <div class="search">
+
+        <span>⌕</span>
+
+        <input
+            id="searchInput"
+            placeholder="Search command center..."
+            autocomplete="off">
+
+    </div>
+
+
+    <div class="time-center">
+
+        <div
+            class="date"
+            id="date">
+        </div>
+
+        <div
+            class="clock"
+            id="clock">
+        </div>
+
+    </div>
+
+
+    <div class="header-right">
+
+        <div class="status">
+
+            <span class="dot"></span>
+
+            SYSTEM STATUS: OPTIMAL
+
+        </div>
+
+        <button
+            class="util"
+            onclick="openChat()">
+            ◌
+        </button>
+
+        <button
+            class="util">
+            ⚙
+        </button>
+
+        <div class="profile">
+
+            <div class="avatar">
+                O
+            </div>
+
+            Operator
+
+        </div>
+
+    </div>
+
+
+</header>
+
+
+
+<!-- ======================================================
+     AI CORE
+====================================================== -->
+
+<section class="core-grid">
+
+
+    <!-- overview -->
+
+    <div class="panel overview">
+
+        <div class="panel-title">
+
+            <span>
+                <span class="panel-title-icon">
+                    ◉
+                </span>
+
+                AI CORE OVERVIEW
+            </span>
+
+            <span class="link">
+                LIVE
+            </span>
+
+        </div>
+
+
+        <div class="metrics">
+
+
+            <div class="metric">
+
+                <div class="metric-left">
+
+                    <span class="check">
+                        ✓
+                    </span>
+
+                    AI Core
+
+                </div>
+
+                <span class="online">
+                    ONLINE
+                </span>
+
+            </div>
+
+
+            <div class="metric">
+
+                <div class="metric-left">
+
+                    <span class="check">
+                        ✓
+                    </span>
+
+                    Memory
+
+                </div>
+
+                <span class="online">
+                    ONLINE
+                </span>
+
+            </div>
+
+
+            <div class="metric">
+
+                <div class="metric-left">
+
+                    <span class="check">
+                        ✓
+                    </span>
+
+                    Agents
+
+                </div>
+
+                <span class="online">
+                    ONLINE
+                </span>
+
+            </div>
+
+
+            <div class="metric">
+
+                <div class="metric-left">
+
+                    <span class="check">
+                        ✓
+                    </span>
+
+                    LLMs
+
+                </div>
+
+                <span class="online">
+                    ONLINE
+                </span>
+
+            </div>
+
+
+            <div class="metric">
+
+                <div class="metric-left">
+
+                    <span class="check">
+                        ✓
+                    </span>
+
+                    System
+
+                </div>
+
+                <span class="online">
+                    OPTIMAL
+                </span>
+
+            </div>
+
+
+        </div>
+
+    </div>
+
+
+
+    <!-- sphere -->
+
+    <div class="panel core-center">
+
+
+        <div class="core-label">
+
+            <h1>
+                JARVIS
+            </h1>
+
+            <p>
+                AI CORE · v3.0.1
+            </p>
+
+        </div>
+
+
+        <div class="node-line left"></div>
+        <div class="node-line right"></div>
+
+
+        <div class="sphere">
+
+            <div class="sphere-ring"></div>
+
+            <div class="sphere-ring r2"></div>
+
+            <div class="sphere-ring r3"></div>
+
+            <div class="sphere-ring r4"></div>
+
+            <div class="sphere-core"></div>
+
+            <span class="sphere-dot"></span>
+            <span class="sphere-dot"></span>
+            <span class="sphere-dot"></span>
+            <span class="sphere-dot"></span>
+
+        </div>
+
+    </div>
+
+
+
+    <!-- intelligence -->
+
+    <div class="panel feed">
+
+        <div class="panel-title">
+
+            <span>
+                <span class="panel-title-icon">
+                    ◈
+                </span>
+
+                LIVE INTELLIGENCE FEED
+            </span>
+
+            <span class="link">
+                View All
+            </span>
+
+        </div>
+
+
+        <div class="feed-item">
+
+            <div class="feed-icon alert">
+                !
+            </div>
+
+            <div class="feed-text">
+                JARVIS system initialized.
+            </div>
+
+            <div class="feed-time">
+                now
+            </div>
+
+        </div>
+
+
+        <div class="feed-item">
+
+            <div class="feed-icon">
+                ◉
+            </div>
+
+            <div class="feed-text">
+                OpenRouter AI Core connected.
+            </div>
+
+            <div class="feed-time">
+                1m
+            </div>
+
+        </div>
+
+
+        <div class="feed-item">
+
+            <div class="feed-icon">
+                ◇
+            </div>
+
+            <div class="feed-text">
+                Memory subsystem operational.
+            </div>
+
+            <div class="feed-time">
+                2m
+            </div>
+
+        </div>
+
+
+        <div class="feed-item">
+
+            <div class="feed-icon">
+                ◎
+            </div>
+
+            <div class="feed-text">
+                Web intelligence ready.
+            </div>
+
+            <div class="feed-time">
+                3m
+            </div>
+
+        </div>
+
+
+        <div class="feed-item">
+
+            <div class="feed-icon">
+                ✓
+            </div>
+
+            <div class="feed-text">
+                All core services stable.
+            </div>
+
+            <div class="feed-time">
+                4m
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+
+<!-- ======================================================
+     MIDDLE
+====================================================== -->
+
+<section class="middle-grid">
+
+
+    <!-- AGENTS -->
+
+    <div class="panel">
+
+        <div class="panel-title">
+
+            <span>
+                <span class="panel-title-icon">
+                    ◇
+                </span>
+
+                ACTIVE AGENTS
+            </span>
+
+            <span class="link">
+                6 ACTIVE
+            </span>
+
+        </div>
+
+
+        <div class="agent-grid">
+
+
+            <div class="agent">
+
+                <div
+                    class="agent-icon"
+                    style="color:#22d3ee">
+                    ⌘
+                </div>
+
+                <div class="agent-name">
+                    Coding Agent
+                </div>
+
+                <div class="agent-status">
+                    <span class="dot"></span>
+                    ACTIVE
+                </div>
+
+            </div>
+
+
+            <div class="agent">
+
+                <div
+                    class="agent-icon"
+                    style="color:#3b82f6">
+                    ◉
+                </div>
+
+                <div class="agent-name">
+                    Research Agent
+                </div>
+
+                <div class="agent-status">
+                    <span class="dot"></span>
+                    ACTIVE
+                </div>
+
+            </div>
+
+
+            <div class="agent">
+
+                <div
+                    class="agent-icon"
+                    style="color:#a78bfa">
+                    ◎
+                </div>
+
+                <div class="agent-name">
+                    Browser Agent
+                </div>
+
+                <div class="agent-status">
+                    <span class="dot"></span>
+                    ACTIVE
+                </div>
+
+            </div>
+
+
+            <div class="agent">
+
+                <div
+                    class="agent-icon"
+                    style="color:#34d399">
+                    ◇
+                </div>
+
+                <div class="agent-name">
+                    Memory Agent
+                </div>
+
+                <div class="agent-status">
+                    <span class="dot"></span>
+                    ACTIVE
+                </div>
+
+            </div>
+
+
+            <div class="agent">
+
+                <div
+                    class="agent-icon"
+                    style="color:#f59e0b">
+                    ✓
+                </div>
+
+                <div class="agent-name">
+                    Task Agent
+                </div>
+
+                <div class="agent-status">
+                    <span class="dot"></span>
+                    ACTIVE
+                </div>
+
+            </div>
+
+
+            <div class="agent">
+
+                <div
+                    class="agent-icon"
+                    style="color:#fb7185">
+                    ⚙
+                </div>
+
+                <div class="agent-name">
+                    System Agent
+                </div>
+
+                <div class="agent-status">
+                    <span class="dot"></span>
+                    ACTIVE
+                </div>
+
+            </div>
+
+
+        </div>
+
+    </div>
+
+
+
+    <!-- TIMELINE -->
+
+    <div class="panel">
+
+        <div class="panel-title">
+
+            <span>
+                <span class="panel-title-icon">
+                    ◷
+                </span>
+
+                MISSION TIMELINE
+            </span>
+
+            <span class="link">
+                Full Schedule
+            </span>
+
+        </div>
+
+
+        <div class="timeline">
+
+
+            <div class="timeline-item done">
+
+                <div class="timeline-check">
+                    ✓
+                </div>
+
+                <div class="timeline-text">
+                    Initialize JARVIS Core
+                </div>
+
+            </div>
+
+
+            <div class="timeline-item done">
+
+                <div class="timeline-check">
+                    ✓
+                </div>
+
+                <div class="timeline-text">
+                    Connect AI provider
+                </div>
+
+            </div>
+
+
+            <div class="timeline-item">
+
+                <div class="timeline-check">
+                    •
+                </div>
+
+                <div class="timeline-text">
+                    Connect personal tools
+                </div>
+
+            </div>
+
+
+            <div class="timeline-item">
+
+                <div class="timeline-check">
+                    •
+                </div>
+
+                <div class="timeline-text">
+                    Configure communications
+                </div>
+
+            </div>
+
+
+            <div class="timeline-item">
+
+                <div class="timeline-check">
+                    •
+                </div>
+
+                <div class="timeline-text">
+                    Activate automation layer
+                </div>
+
+            </div>
+
+
+        </div>
+
+    </div>
+
+
+
+    <!-- QUICK COMMANDS -->
+
+    <div class="panel quick-panel">
+
+        <div class="panel-title">
+
+            <span>
+                <span class="panel-title-icon">
+                    ⚡
+                </span>
+
+                QUICK COMMANDS
+            </span>
+
+        </div>
+
+
+        <div class="quick">
+
+            <button
+                class="quick-btn"
+                onclick="quickCommand('nueva tarea')">
+
+                <span>＋</span>
+
+                New Task
+
+            </button>
+
+
+            <button
+                class="quick-btn"
+                onclick="quickCommand('abre calendario')">
+
+                <span>□</span>
+
+                Open Calendar
+
+            </button>
+
+
+            <button
+                class="quick-btn"
+                onclick="openChat()">
+
+                <span>◌</span>
+
+                Start New Chat
+
+            </button>
+
+
+            <button
+                class="quick-btn"
+                onclick="quickCommand('crea una tarea de revisar mi proyecto Jarvis')">
+
+                <span>◇</span>
+
+                New Workflow
+
+            </button>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+
+<!-- ======================================================
+     BOTTOM
+====================================================== -->
+
+<section class="bottom-grid">
+
+
+    <!-- SYSTEM MONITOR -->
+
+    <div class="panel">
+
+        <div class="panel-title">
+
+            <span>
+                <span class="panel-title-icon">
+                    ◌
+                </span>
+
+                SYSTEM MONITOR
+            </span>
+
+            <span class="link">
+                LIVE
+            </span>
+
+        </div>
+
+
+        <div class="gauges">
+
+
+            <div class="gauge">
+
+                <div
+                    class="gauge-ring"
+                    style="
+                        --value:64%;
+                        --gauge-color:#22d3ee;
+                    ">
+
+                    <span
+                        class="gauge-value">
+                        64%
+                    </span>
+
+                </div>
+
+                <div class="gauge-label">
+                    CPU
+                </div>
+
+            </div>
+
+
+            <div class="gauge">
+
+                <div
+                    class="gauge-ring"
+                    style="
+                        --value:48%;
+                        --gauge-color:#3b82f6;
+                    ">
+
+                    <span
+                        class="gauge-value">
+                        48%
+                    </span>
+
+                </div>
+
+                <div class="gauge-label">
+                    RAM
+                </div>
+
+            </div>
+
+
+            <div class="gauge">
+
+                <div
+                    class="gauge-ring"
+                    style="
+                        --value:82%;
+                        --gauge-color:#34d399;
+                    ">
+
+                    <span
+                        class="gauge-value">
+                        82%
+                    </span>
+
+                </div>
+
+                <div class="gauge-label">
+                    HEALTH
+                </div>
+
+            </div>
+
+
+        </div>
+
+    </div>
+
+
+
+    <!-- MEMORY -->
+
+    <div class="panel">
+
+        <div class="panel-title">
+
+            <span>
+                <span class="panel-title-icon">
+                    ◈
+                </span>
+
+                MEMORY INSIGHTS
+            </span>
+
+        </div>
+
+
+        <div class="memory">
+
+            <div
+                class="memory-number"
+                id="memoryCount">
+                3,380
+            </div>
+
+            <div class="memory-label">
+                MEMORY FRAGMENTS
+            </div>
+
+            <div class="memory-secondary">
+                Long-term memory subsystem
+                <strong style="color:#34d399">
+                    ONLINE
+                </strong>
+            </div>
+
+            <div
+                class="link"
+                style="margin-top:13px">
+                View Memory Map
+            </div>
+
+        </div>
+
+    </div>
+
+
+
+    <!-- LLM -->
+
+    <div class="panel llm-panel">
+
+        <div class="panel-title">
+
+            <span>
+                <span class="panel-title-icon">
+                    ◎
+                </span>
+
+                LLM STATUS
+            </span>
+
+            <span class="link">
+                Manage Providers
+            </span>
+
+        </div>
+
+
+        <div class="providers">
+
+
+            <div class="provider">
+
+                <div class="provider-name">
+                    OpenRouter
+                </div>
+
+                <div class="provider-status">
+                    <span class="dot"></span>
+                    CONNECTED
+                </div>
+
+            </div>
+
+
+            <div class="provider">
+
+                <div class="provider-name">
+                    OpenAI
+                </div>
+
+                <div class="provider-status">
+                    <span
+                        class="dot"
+                        style="background:#718096;
+                               box-shadow:none">
+                    </span>
+                    READY
+                </div>
+
+            </div>
+
+
+            <div class="provider">
+
+                <div class="provider-name">
+                    Claude
+                </div>
+
+                <div class="provider-status">
+                    <span
+                        class="dot"
+                        style="background:#718096;
+                               box-shadow:none">
+                    </span>
+                    READY
+                </div>
+
+            </div>
+
+
+            <div class="provider">
+
+                <div class="provider-name">
+                    Gemini
+                </div>
+
+                <div class="provider-status">
+                    <span
+                        class="dot"
+                        style="background:#718096;
+                               box-shadow:none">
+                    </span>
+                    READY
+                </div>
+
+            </div>
+
+
+            <div class="provider">
+
+                <div class="provider-name">
+                    Claude Code
+                </div>
+
+                <div class="provider-status">
+                    <span
+                        class="dot"
+                        style="background:#718096;
+                               box-shadow:none">
+                    </span>
+                    READY
+                </div>
+
+            </div>
+
+
+            <div class="provider">
+
+                <div class="provider-name">
+                    WhatsApp
+                </div>
+
+                <div class="provider-status">
+
+                    <span
+                        class="dot"
+                        id="whatsappDot"
+                        style="background:#718096;
+                               box-shadow:none">
+                    </span>
+
+                    <span id="whatsappStatus">
+                        CONFIGURE
+                    </span>
+
+                </div>
+
+            </div>
+
+
+        </div>
+
+    </div>
+
+</section>
+
+
+</main>
+
 </div>
 
-<div class="equalizer" id="eq">
- <span></span><span></span><span></span><span></span>
- <span></span><span></span><span></span><span></span>
- <span></span><span></span><span></span><span></span>
- <span></span><span></span><span></span><span></span>
+
+
+<!-- ======================================================
+     CHAT WINDOW
+====================================================== -->
+
+<div
+    class="chat-panel"
+    id="chatPanel">
+
+
+    <div class="chat-head">
+
+        <div class="chat-head-title">
+            J.A.R.V.I.S. LINK
+        </div>
+
+        <button
+            class="close-chat"
+            onclick="closeChat()">
+            ×
+        </button>
+
+    </div>
+
+
+    <div
+        class="messages"
+        id="messages">
+
+        <div class="message jarvis">
+
+            Sistemas en línea.
+
+            <br><br>
+
+            Soy JARVIS. ¿Qué necesitas,
+            operador?
+
+        </div>
+
+    </div>
+
+
+    <div class="chat-input">
+
+        <input
+            id="chatInput"
+            placeholder="Habla con JARVIS..."
+            autocomplete="off">
+
+        <button
+            class="send"
+            onclick="sendMessage()">
+            ➤
+        </button>
+
+    </div>
+
 </div>
 
-<div class="status" id="status">
-AWAITING COMMAND...
+
+
+<!-- ======================================================
+     TALK BAR
+====================================================== -->
+
+<div class="talkbar">
+
+
+    <div class="talk-wrap">
+
+
+        <div class="audio-side">
+
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+
+        </div>
+
+
+        <button
+            class="talk-button"
+            id="talkButton"
+            onclick="toggleListening()">
+
+
+            <div class="mic">
+                🎙
+            </div>
+
+
+            <div class="talk-text">
+
+                <div class="talk-main">
+                    TALK TO JARVIS
+                </div>
+
+                <div
+                    class="talk-sub"
+                    id="talkStatus">
+                    Idle
+                </div>
+
+            </div>
+
+
+        </button>
+
+
+        <div class="audio-side">
+
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+
+        </div>
+
+
+    </div>
+
 </div>
 
-<button class="mic" id="mic">🎙</button>
 
-</div>
 
 <script>
 
-const hud=document.getElementById("hud");
-const mic=document.getElementById("mic");
-const status=document.getElementById("status");
-const response=document.getElementById("response");
-const bars=[...document.querySelectorAll(".equalizer span")];
+/* =========================================================
+   CLOCK
+========================================================= */
 
-let recognition=null;
-let speaking=false;
+function updateClock() {
 
-/* ECUALIZADOR */
+    const now =
+        new Date();
 
-setInterval(()=>{
- bars.forEach(b=>{
-  const max=hud.classList.contains("listening")?38:15;
-  b.style.height=(5+Math.random()*max)+"px";
- });
-},110);
+    const date =
+        now.toLocaleDateString(
+            "en-US",
+            {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric"
+            }
+        );
 
-/* VOZ */
+    const time =
+        now.toLocaleTimeString(
+            "en-US",
+            {
+                hour: "numeric",
+                minute: "2-digit",
+                second: "2-digit"
+            }
+        );
 
-function speak(text){
+    document.getElementById(
+        "date"
+    ).textContent = date;
 
- if(!("speechSynthesis" in window)) return;
-
- speechSynthesis.cancel();
-
- const u=new SpeechSynthesisUtterance(text);
- u.lang="es-PA";
- u.rate=.95;
- u.pitch=1;
-
- const voices=speechSynthesis.getVoices();
-
- const spanish=voices.find(v=>
-  v.lang &&
-  v.lang.toLowerCase().startsWith("es")
- );
-
- if(spanish) u.voice=spanish;
-
- u.onstart=()=>{
-  speaking=true;
- };
-
- u.onend=()=>{
-  speaking=false;
- };
-
- speechSynthesis.speak(u);
+    document.getElementById(
+        "clock"
+    ).textContent = time;
 }
 
-/* COMUNICACIÓN */
+setInterval(
+    updateClock,
+    1000
+);
 
-async function ask(message){
+updateClock();
 
- status.textContent="PROCESSING...";
 
- response.innerHTML=
- "<div>USER: "+escapeHtml(message)+"</div>";
+/* =========================================================
+   CHAT
+========================================================= */
 
- try{
+const chatPanel =
+    document.getElementById(
+        "chatPanel"
+    );
 
-  const r=await fetch("/chat",{
-   method:"POST",
-   headers:{
-    "Content-Type":"application/json"
-   },
-   body:JSON.stringify({
-    message:message
-   })
-  });
+const chatInput =
+    document.getElementById(
+        "chatInput"
+    );
 
-  const data=await r.json();
+const messages =
+    document.getElementById(
+        "messages"
+    );
 
-  response.innerHTML=
-   "<div>USER: "+escapeHtml(message)+"</div>"+
-   "<div style='margin-top:7px'>JARVIS: "+
-   escapeHtml(data.reply)+"</div>";
 
-  response.scrollTop=response.scrollHeight;
+function openChat() {
 
-  speak(data.reply);
+    chatPanel.classList.add(
+        "open"
+    );
 
- }catch(error){
-
-  response.innerHTML+="<div>JARVIS: Error de conexión.</div>";
-
- }
-
- status.textContent="AWAITING COMMAND...";
+    setTimeout(
+        () => chatInput.focus(),
+        100
+    );
 }
 
-function escapeHtml(text){
 
- return String(text)
- .replaceAll("&","&amp;")
- .replaceAll("<","&lt;")
- .replaceAll(">","&gt;")
- .replaceAll('"',"&quot;");
+function closeChat() {
 
+    chatPanel.classList.remove(
+        "open"
+    );
 }
 
-/* RECONOCIMIENTO */
 
-const SpeechRecognition=
- window.SpeechRecognition ||
- window.webkitSpeechRecognition;
+function addMessage(
+    text,
+    type
+) {
 
-if(SpeechRecognition){
+    const div =
+        document.createElement(
+            "div"
+        );
 
- recognition=new SpeechRecognition();
+    div.className =
+        "message " + type;
 
- recognition.lang="es-PA";
- recognition.continuous=false;
- recognition.interimResults=false;
+    div.textContent =
+        text;
 
- recognition.onstart=()=>{
+    messages.appendChild(
+        div
+    );
 
-  hud.classList.add("listening");
-  status.textContent="LISTENING...";
-
- };
-
- recognition.onresult=(event)=>{
-
-  const text=
-   event.results[0][0].transcript;
-
-  ask(text);
-
- };
-
- recognition.onerror=()=>{
-
-  hud.classList.remove("listening");
-  status.textContent="AWAITING COMMAND...";
-
- };
-
- recognition.onend=()=>{
-
-  hud.classList.remove("listening");
-
-  if(!speaking){
-   status.textContent="AWAITING COMMAND...";
-  }
-
- };
-
-}else{
-
- status.textContent="MICROPHONE UNAVAILABLE";
-
+    messages.scrollTop =
+        messages.scrollHeight;
 }
 
-/* BOTÓN */
 
-mic.onclick=()=>{
+async function sendMessage(
+    supplied = null
+) {
 
- if(recognition){
+    const message =
+        supplied !== null
+            ? supplied
+            : chatInput.value.trim();
 
-  try{
-   recognition.start();
-  }catch(e){}
+    if (!message) {
+        return;
+    }
 
- }else{
+    openChat();
 
-  const text=prompt("Escribe tu comando:");
+    if (
+        supplied === null
+    ) {
+        chatInput.value = "";
+    }
 
-  if(text) ask(text);
+    addMessage(
+        message,
+        "user"
+    );
 
- }
+    addMessage(
+        "Procesando...",
+        "jarvis"
+    );
 
-};
+    const loading =
+        messages.lastElementChild;
 
-/* PWA */
+    try {
 
-if("serviceWorker" in navigator){
+        const response =
+            await fetch(
+                "/chat",
+                {
+                    method: "POST",
 
- navigator.serviceWorker.register(
-  "/service-worker.js"
- ).catch(()=>{});
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
 
+                    body:
+                        JSON.stringify({
+                            message:
+                                message
+                        })
+                }
+            );
+
+        const data =
+            await response.json();
+
+        loading.remove();
+
+        const reply =
+            data.reply ||
+            "No recibí respuesta.";
+
+        addMessage(
+            reply,
+            "jarvis"
+        );
+
+        speak(reply);
+
+    } catch (error) {
+
+        loading.remove();
+
+        addMessage(
+            "No pude comunicarme con el servidor.",
+            "jarvis"
+        );
+    }
+}
+
+
+chatInput.addEventListener(
+    "keydown",
+    function(event) {
+
+        if (
+            event.key === "Enter"
+        ) {
+            sendMessage();
+        }
+    }
+);
+
+
+/* =========================================================
+   QUICK COMMANDS
+========================================================= */
+
+function quickCommand(
+    command
+) {
+
+    openChat();
+
+    sendMessage(
+        command
+    );
+}
+
+
+/* =========================================================
+   SPEECH
+========================================================= */
+
+let recognition = null;
+
+let listening = false;
+
+
+const SpeechRecognition =
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition;
+
+
+if (SpeechRecognition) {
+
+    recognition =
+        new SpeechRecognition();
+
+    recognition.lang =
+        "es-PA";
+
+    recognition.continuous =
+        false;
+
+    recognition.interimResults =
+        false;
+
+
+    recognition.onstart =
+        function() {
+
+            listening = true;
+
+            setListeningUI(
+                true
+            );
+        };
+
+
+    recognition.onend =
+        function() {
+
+            listening = false;
+
+            setListeningUI(
+                false
+            );
+        };
+
+
+    recognition.onerror =
+        function() {
+
+            listening = false;
+
+            setListeningUI(
+                false
+            );
+        };
+
+
+    recognition.onresult =
+        function(event) {
+
+            const text =
+                event.results[0][0].transcript;
+
+            openChat();
+
+            sendMessage(
+                text
+            );
+        };
+}
+
+
+function toggleListening() {
+
+    if (!recognition) {
+
+        openChat();
+
+        addMessage(
+            "El navegador no permite reconocimiento de voz. Puedes escribir tu comando.",
+            "jarvis"
+        );
+
+        return;
+    }
+
+    if (listening) {
+
+        recognition.stop();
+
+    } else {
+
+        try {
+
+            recognition.start();
+
+        } catch(e) {
+
+        }
+
+    }
+}
+
+
+function setListeningUI(
+    active
+) {
+
+    const button =
+        document.getElementById(
+            "talkButton"
+        );
+
+    const status =
+        document.getElementById(
+            "talkStatus"
+        );
+
+    if (active) {
+
+        button.classList.add(
+            "listening"
+        );
+
+        status.textContent =
+            "Listening...";
+
+    } else {
+
+        button.classList.remove(
+            "listening"
+        );
+
+        status.textContent =
+            "Idle";
+    }
+}
+
+
+/* =========================================================
+   TEXT TO SPEECH
+========================================================= */
+
+function speak(text) {
+
+    if (
+        !window.speechSynthesis
+    ) {
+        return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    const clean =
+        String(text)
+        .replace(
+            /https?:\/\/\S+/g,
+            ""
+        );
+
+    const utterance =
+        new SpeechSynthesisUtterance(
+            clean
+        );
+
+    utterance.lang =
+        "es-PA";
+
+    utterance.rate =
+        0.96;
+
+    utterance.pitch =
+        1.0;
+
+    const voices =
+        window.speechSynthesis
+        .getVoices();
+
+    const spanish =
+        voices.find(
+            v =>
+                v.lang &&
+                v.lang
+                    .toLowerCase()
+                    .startsWith("es")
+        );
+
+    if (spanish) {
+        utterance.voice =
+            spanish;
+    }
+
+    window.speechSynthesis
+        .speak(
+            utterance
+        );
+}
+
+
+/* =========================================================
+   VOICE PAUSE
+========================================================= */
+
+let voicePaused = false;
+
+
+function toggleVoice() {
+
+    voicePaused =
+        !voicePaused;
+
+    if (voicePaused) {
+
+        if (
+            window.speechSynthesis
+        ) {
+            window.speechSynthesis.cancel();
+        }
+
+        document.querySelector(
+            ".listening span:last-child"
+        ).textContent =
+            "Paused";
+
+    } else {
+
+        document.querySelector(
+            ".listening span:last-child"
+        ).textContent =
+            "Listening";
+    }
+}
+
+
+/* =========================================================
+   NAVIGATION INTERACTION
+========================================================= */
+
+document
+    .querySelectorAll(
+        ".nav-item"
+    )
+    .forEach(
+        item => {
+
+            item.addEventListener(
+                "click",
+                () => {
+
+                    document
+                        .querySelectorAll(
+                            ".nav-item"
+                        )
+                        .forEach(
+                            n =>
+                                n.classList
+                                 .remove(
+                                     "active"
+                                 )
+                        );
+
+                    item.classList.add(
+                        "active"
+                    );
+
+                    const label =
+                        item
+                        .querySelector(
+                            "span:last-child"
+                        );
+
+                    if (label) {
+
+                        const name =
+                            label.textContent
+                            .trim();
+
+                        if (
+                            name !==
+                            "Command Center"
+                        ) {
+
+                            quickCommand(
+                                "abre " +
+                                name
+                            );
+                        }
+                    }
+                }
+            );
+
+        }
+    );
+
+
+/* =========================================================
+   SEARCH
+========================================================= */
+
+document
+    .getElementById(
+        "searchInput"
+    )
+    .addEventListener(
+        "keydown",
+        function(event) {
+
+            if (
+                event.key ===
+                "Enter"
+            ) {
+
+                const value =
+                    this.value.trim();
+
+                if (value) {
+
+                    openChat();
+
+                    sendMessage(
+                        "busca " +
+                        value
+                    );
+
+                    this.value =
+                        "";
+                }
+            }
+        }
+    );
+
+
+/* =========================================================
+   SYSTEM STATUS
+========================================================= */
+
+async function updateSystem() {
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/system"
+            );
+
+        const data =
+            await response.json();
+
+        const dot =
+            document.getElementById(
+                "whatsappDot"
+            );
+
+        const status =
+            document.getElementById(
+                "whatsappStatus"
+            );
+
+        if (
+            data.whatsapp
+        ) {
+
+            dot.style.background =
+                "#34d399";
+
+            dot.style.boxShadow =
+                "0 0 12px #34d399";
+
+            status.textContent =
+                "CONNECTED";
+
+        } else {
+
+            dot.style.background =
+                "#718096";
+
+            dot.style.boxShadow =
+                "none";
+
+            status.textContent =
+                "CONFIGURE";
+        }
+
+    } catch(e) {
+
+    }
+}
+
+updateSystem();
+
+
+/* =========================================================
+   PWA
+========================================================= */
+
+if (
+    "serviceWorker"
+    in navigator
+) {
+
+    navigator
+        .serviceWorker
+        .register(
+            "/service-worker.js"
+        )
+        .catch(
+            () => {}
+        );
+}
+
+
+/* =========================================================
+   LOAD VOICES
+========================================================= */
+
+if (
+    window.speechSynthesis
+) {
+
+    window.speechSynthesis
+        .getVoices();
+
+    window.speechSynthesis
+        .onvoiceschanged =
+        () => {
+
+            window.speechSynthesis
+                .getVoices();
+
+        };
 }
 
 </script>
 
+
 </body>
-</html>''',mimetype="text/html")
 
-# ================= ARRANQUE =================
+</html>
+"""
 
-if __name__=="__main__":
+    return Response(
+        html,
+        mimetype="text/html"
+    )
+
+
+# ============================================================
+# START
+# ============================================================
+
+if __name__ == "__main__":
+
+    print(
+        "=========================================="
+    )
+
+    print(
+        " J.A.R.V.I.S. COMMAND CENTER"
+    )
+
+    print(
+        " Brain: OpenRouter"
+    )
+
+    print(
+        " Memory: SQLite"
+    )
+
+    print(
+        " Web: DuckDuckGo"
+    )
+
+    print(
+        " Voice: Browser"
+    )
+
+    print(
+        " Agents: 6"
+    )
+
+    print(
+        " WhatsApp:",
+        "READY"
+        if whatsapp_available()
+        else "NOT CONFIGURED"
+    )
+
+    print(
+        "=========================================="
+    )
+
     app.run(
         host="0.0.0.0",
-        port=int(os.environ.get("PORT",8000))
-        )
+        port=PORT
+                )
