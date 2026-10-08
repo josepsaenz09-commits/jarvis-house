@@ -1,43 +1,243 @@
-import os,json,sqlite3,time
-from flask import Flask,request,Response,jsonify
+import os,json,sqlite3,urllib.parse,urllib.request,re
+from flask import Flask,request,jsonify,Response
 from openai import OpenAI
+
 app=Flask(__name__)
-client=OpenAI(api_key=os.getenv('OPENROUTER_API_KEY'),base_url='https://openrouter.ai/api/v1')
-DB='jarvis_memory.db'
-def init():
- c=sqlite3.connect(DB);c.execute('CREATE TABLE IF NOT EXISTS memory(id INTEGER PRIMARY KEY,text TEXT,ts REAL)');c.commit();c.close()
-def mems():
- c=sqlite3.connect(DB);r=[x[0] for x in c.execute('SELECT text FROM memory ORDER BY id DESC LIMIT 30')];c.close();return r
-def save(x):
- c=sqlite3.connect(DB);c.execute('INSERT INTO memory(text,ts) VALUES(?,?)',(x,time.time()));c.commit();c.close()
-init()
-MAN=json.dumps({'name':'J.A.R.V.I.S.','short_name':'JARVIS','start_url':'/','scope':'/','display':'standalone','background_color':'#0a0e17','theme_color':'#22d3ee','orientation':'portrait','icons':[{'src':'/icon.svg','sizes':'any','type':'image/svg+xml','purpose':'any maskable'}]})
-SW='''const C="jarvis-v4";self.addEventListener("install",e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(["/","/manifest.json","/icon.svg"])));self.skipWaiting()});self.addEventListener("activate",e=>e.waitUntil(self.clients.claim()));self.addEventListener("fetch",e=>{if(e.request.method==="GET")e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})'''
-ICON='''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#0a0e17"/><circle cx="256" cy="256" r="205" fill="none" stroke="#22d3ee" stroke-width="8"/><circle cx="256" cy="256" r="85" fill="#09202b" stroke="#dffcff" stroke-width="6"/><text x="256" y="286" text-anchor="middle" font-family="Arial" font-size="92" font-weight="bold" fill="#dffcff">J</text></svg>'''
-HTML='''<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0a0e17"><meta name="mobile-web-app-capable" content="yes"><link rel="manifest" href="/manifest.json"><link rel="icon" href="/icon.svg"><title>J.A.R.V.I.S.</title><style>
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0a0e17;color:#dffcff;font-family:Arial,sans-serif}body{display:grid;place-items:center;background:radial-gradient(circle,#102c38 0,#0a0e17 48%,#03050a 100%)}#a{width:min(100%,900px);height:100%;position:relative;overflow:hidden}.grid{position:absolute;inset:0;background:linear-gradient(#22d3ee12 1px,transparent 1px),linear-gradient(90deg,#22d3ee12 1px,transparent 1px);background-size:42px 42px;animation:g 7s linear infinite}@keyframes g{to{background-position:42px 42px}}.top{position:absolute;z-index:9;top:18px;left:20px;right:20px;display:flex;justify-content:space-between}.logo{font-weight:900;letter-spacing:4px;text-shadow:0 0 15px #22d3ee}.online{color:#22d3ee;font-size:11px;letter-spacing:2px;animation:b 1.7s infinite}@keyframes b{50%{opacity:.4}}.core{position:absolute;left:50%;top:44%;width:min(86vw,430px);aspect-ratio:1;transform:translate(-50%,-50%)}.ring,.rip,.ticks{position:absolute;inset:0;border-radius:50%;pointer-events:none}.r1{border:2px solid #22d3ee55;box-shadow:0 0 30px #22d3ee22;animation:r 9s linear infinite}.r2{inset:7%;border:1px dashed #22d3ee99;animation:r 13s linear infinite reverse}.r3{inset:15%;border:1px solid #22d3ee55;border-top-color:#fff;animation:r 5s linear infinite}.r4{inset:23%;border:1px solid #22d3ee33;animation:r 18s linear infinite reverse}@keyframes r{to{transform:rotate(360deg)}}.rip{inset:29%;border:2px solid #22d3ee77;animation:p 3s ease-out infinite}.rip:nth-of-type(6){animation-delay:1.5s}@keyframes p{0%{transform:scale(.45);opacity:.8}100%{transform:scale(1.6);opacity:0}}.core.listen .r1{animation-duration:3s}.core.listen .r2{animation-duration:4s}.core.listen .r3{animation-duration:2s}.core.listen .rip{animation-duration:1.2s}.btn{position:absolute;z-index:5;left:34%;top:34%;width:32%;aspect-ratio:1;border:2px solid #dffcff;border-radius:50%;background:radial-gradient(circle,#164453,#06131a 70%);box-shadow:0 0 20px #22d3ee,0 0 60px #22d3ee55;animation:q 2.8s ease-in-out infinite,gl 2s infinite;display:grid;place-items:center}.listen .btn{box-shadow:0 0 35px #22d3ee,0 0 100px #22d3ee99}@keyframes q{50%{transform:scale(1.05);opacity:1}}@keyframes gl{50%{box-shadow:0 0 30px #22d3ee,0 0 90px #22d3ee88}}.mic{width:28%;height:42%;border:4px solid #dffcff;border-radius:30px;position:relative;box-shadow:0 0 15px #22d3ee}.mic:after{content:"";position:absolute;left:-45%;bottom:-32%;width:190%;height:70%;border:4px solid #dffcff;border-top:0;border-radius:0 0 50px 50px}.mic i{position:absolute;left:44%;bottom:-58%;width:4px;height:38%;background:#dffcff}.ticks{inset:3%;animation:r 5s linear infinite}.tick{position:absolute;left:50%;top:0;width:2px;height:9px;background:#22d3ee77;transform-origin:50% 203px}.tick:nth-child(3n){background:#fff;box-shadow:0 0 8px #22d3ee}.state{position:absolute;top:78%;width:100%;text-align:center;font-size:12px;letter-spacing:4px;text-shadow:0 0 10px #22d3ee;animation:b 1s steps(2) infinite}.eq{position:absolute;top:85%;left:50%;transform:translateX(-50%);height:48px;width:220px;display:flex;gap:4px;align-items:end;justify-content:center}.bar{width:4px;height:6px;background:#22d3ee;border-radius:5px;box-shadow:0 0 9px #22d3ee}.parts i{position:absolute;width:3px;height:3px;background:#9ffaff;border-radius:50%;box-shadow:0 0 9px #22d3ee;animation:f 5s ease-in-out infinite}.parts i:nth-child(1){left:12%;top:30%}.parts i:nth-child(2){left:84%;top:27%;animation-delay:1s}.parts i:nth-child(3){left:18%;top:70%;animation-delay:2s}.parts i:nth-child(4){left:80%;top:72%;animation-delay:3s}.parts i:nth-child(5){left:50%;top:12%;animation-delay:1.5s}@keyframes f{50%{transform:translate(14px,-22px) scale(1.7);opacity:.25}}.panel{position:absolute;left:20px;top:60px;color:#22d3ee88;font-size:9px;line-height:1.8;letter-spacing:1px}.chat{position:absolute;left:20px;right:20px;bottom:78px;max-height:16vh;overflow:auto;font-size:12px}.u{color:#fff;margin:4px 0}.j{color:#22d3ee;margin:4px 0}.form{position:absolute;z-index:9;left:20px;right:20px;bottom:18px;display:flex;gap:8px}.input{flex:1;background:#06131b;border:1px solid #22d3ee55;border-radius:10px;padding:13px;color:#dffcff;outline:none}.send{background:#22d3ee12;border:1px solid #22d3ee;color:#dffcff;border-radius:10px;padding:0 16px}@media(max-height:700px){.core{width:330px;top:42%}.panel{display:none}}
-</style></head><body><main id="a"><div class="grid"></div><div class="parts"><i></i><i></i><i></i><i></i><i></i></div><div class="top"><b class="logo">J.A.R.V.I.S.</b><span class="online">● ONLINE</span></div><div class="panel">CORE: ONLINE<br>NEURAL LINK: ACTIVE<br>VOICE: READY<br>MEMORY: ONLINE</div><section class="core" id="core"><div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div><div class="ring r4"></div><div class="rip"></div><div class="rip"></div><div class="ticks">''' + ''.join('<i class="tick" style="transform:rotate('+str(i*15)+'deg)"></i>' for i in range(24)) + '''</div><button class="btn" id="mic"><span class="mic"><i></i></span></button><div class="state" id="state">AWAITING COMMAND...</div><div class="eq" id="eq">''' + ''.join('<i class="bar"></i>' for _ in range(28)) + '''</div></section><div class="chat" id="chat"></div><form class="form" id="form"><input class="input" id="in" placeholder="Escribe un comando para JARVIS..." autocomplete="off"><button class="send">ENVIAR</button></form></main><script>
-const c=document.querySelector('#core'),m=document.querySelector('#mic'),s=document.querySelector('#state'),bars=[...document.querySelectorAll('.bar')],inp=document.querySelector('#in'),chat=document.querySelector('#chat');let listening=false,rec=null;setInterval(()=>bars.forEach(x=>x.style.height=(listening?8+Math.random()*40:4+Math.random()*14)+'px'),120);function esc(x){return x.replace(/[&<>"']/g,a=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[a]))}function say(x){if(!speechSynthesis)return;speechSynthesis.cancel();let u=new SpeechSynthesisUtterance(x);u.lang='es-PA';u.rate=.96;speechSynthesis.speak(u)}async function send(x){x=x.trim();if(!x)return;chat.innerHTML+='<div class="u">&gt; '+esc(x)+'</div>';s.textContent='PROCESSING...';try{let r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:x})}),d=await r.json();chat.innerHTML+='<div class="j">JARVIS: '+esc(d.reply||'Sin respuesta.')+'</div>';chat.scrollTop=chat.scrollHeight;say(d.reply||'');s.textContent='AWAITING COMMAND...'}catch(e){s.textContent='SYSTEM ERROR'}}document.querySelector('#form').onsubmit=e=>{e.preventDefault();send(inp.value);inp.value=''};function stop(){listening=false;c.classList.remove('listen');s.textContent='AWAITING COMMAND...';if(rec){try{rec.stop()}catch(e){}rec=null}}function start(){let R=window.SpeechRecognition||window.webkitSpeechRecognition;if(!R){s.textContent='VOICE NOT AVAILABLE';return}listening=true;c.classList.add('listen');s.textContent='LISTENING...';rec=new R();rec.lang='es-PA';rec.interimResults=false;rec.continuous=false;rec.onresult=e=>{let x=e.results[0][0].transcript;stop();send(x)};rec.onerror=stop;rec.onend=()=>{if(listening)stop()};rec.start()}m.onclick=()=>listening?stop():start();if('serviceWorker'in navigator)navigator.serviceWorker.register('/service-worker.js');
-</script></body></html>'''
-@app.get('/')
-def home():return Response(HTML,mimetype='text/html')
-@app.get('/manifest.json')
-def manifest():return Response(MAN,mimetype='application/manifest+json')
-@app.get('/service-worker.js')
-def sw():return Response(SW,mimetype='application/javascript')
-@app.get('/icon.svg')
-def icon():return Response(ICON,mimetype='image/svg+xml')
-@app.post('/chat')
+DB="jarvis_memory.db"
+
+client=OpenAI(
+    api_key=os.environ.get("OPENROUTER_API_KEY"),
+    base_url="https://openrouter.ai/api/v1"
+)
+
+def db():
+    c=sqlite3.connect(DB)
+    c.execute("CREATE TABLE IF NOT EXISTS memory(id INTEGER PRIMARY KEY AUTOINCREMENT,text TEXT)")
+    c.commit()
+    return c
+
+def remember(text):
+    c=db()
+    c.execute("INSERT INTO memory(text) VALUES(?)",(text,))
+    c.commit()
+    c.close()
+
+def memories():
+    c=db()
+    rows=c.execute("SELECT text FROM memory ORDER BY id DESC LIMIT 30").fetchall()
+    c.close()
+    return [x[0] for x in rows]
+
+def web_search(q):
+    try:
+        url="https://html.duckduckgo.com/html/?q="+urllib.parse.quote(q)
+        req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0"})
+        html=urllib.request.urlopen(req,timeout=10).read().decode("utf-8","ignore")
+        items=[]
+        for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',html,re.S):
+            link=m.group(1)
+            title=re.sub("<.*?>","",m.group(2)).strip()
+            title=title.replace("&amp;","&")
+            if title and link:
+                items.append({"title":title,"url":link})
+            if len(items)>=5: break
+        return items
+    except Exception as e:
+        return [{"title":"No se pudo realizar la búsqueda","url":""}]
+
+@app.route("/manifest.json")
+def manifest():
+    return Response(json.dumps({
+        "name":"J.A.R.V.I.S.",
+        "short_name":"JARVIS",
+        "start_url":"/",
+        "scope":"/",
+        "display":"standalone",
+        "background_color":"#05080e",
+        "theme_color":"#00eaff",
+        "orientation":"portrait",
+        "icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+    }),mimetype="application/manifest+json")
+
+@app.route("/icon.svg")
+def icon():
+    return Response("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="96" fill="#05080e"/>
+<circle cx="256" cy="256" r="205" fill="none" stroke="#00eaff" stroke-width="7"/>
+<circle cx="256" cy="256" r="170" fill="none" stroke="#00eaff" stroke-width="2" opacity=".55"/>
+<path d="M256 92L420 256L256 420L92 256Z" fill="none" stroke="#00eaff" stroke-width="8"/>
+<circle cx="256" cy="256" r="82" fill="#062431" stroke="#8feeff" stroke-width="6"/>
+<text x="256" y="282" text-anchor="middle" font-family="Arial" font-size="82" font-weight="700" fill="#d6fbff">J</text>
+</svg>""",mimetype="image/svg+xml")
+
+@app.route("/service-worker.js")
+def sw():
+    return Response("""const C="jarvis-pwa-v1";
+self.addEventListener("install",e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(["/","/manifest.json","/icon.svg"])));self.skipWaiting()});
+self.addEventListener("activate",e=>{e.waitUntil(self.clients.claim())});
+self.addEventListener("fetch",e=>{if(e.request.method==="GET")e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))});
+""",mimetype="application/javascript")
+
+@app.route("/chat",methods=["POST"])
 def chat():
- d=request.get_json(silent=True) or {};msg=str(d.get('message','')).strip()
- if not msg:return jsonify(reply='Dime qué necesitas.')
- lo=msg.lower()
- if lo.startswith(('recuerda ','recuerda que ','guarda que ')):
-  save(msg.split(' ',1)[1] if ' ' in msg else msg);return jsonify(reply='Entendido. Lo guardaré en mi memoria.')
- ms=mems();ctx='\n'.join('- '+x for x in ms) if ms else 'Sin recuerdos.'
- prompt=f'''Eres J.A.R.V.I.S., asistente personal en español. Sé natural, directo y útil. No inventes herramientas aún no conectadas. Memoria local disponible:\n{ctx}\nUsuario: {msg}'''
- try:
-  r=client.responses.create(model='openrouter/free',input=prompt);out=getattr(r,'output_text',None) or str(r)
- except Exception:out='No pude contactar al cerebro de JARVIS en este momento.'
- return jsonify(reply=out)
-if __name__=='__main__':app.run(host='0.0.0.0',port=int(os.getenv('PORT',8000)))
+    data=request.get_json(force=True)
+    msg=str(data.get("message","")).strip()
+    if not msg:
+        return jsonify({"reply":"Te escucho."})
+
+    low=msg.lower()
+
+    if low.startswith(("recuerda ","recuerda que ","guarda ","guarda que ")):
+        remember(re.sub(r"^(recuerda|recuerda que|guarda|guarda que)\s*","",msg,flags=re.I))
+        return jsonify({"reply":"Entendido. Lo he guardado en mi memoria."})
+
+    if "qué recuerdas" in low or "que recuerdas" in low:
+        mem=memories()
+        return jsonify({"reply":"Esto es lo que recuerdo:\n\n"+("\n".join("• "+x for x in mem) if mem else "Todavía no tengo recuerdos guardados.")})
+
+    need_search=any(x in low for x in [
+        "busca ","buscar ","búscame ","investiga ","investigar ",
+        "qué pasó hoy","que paso hoy","últimas noticias","ultimas noticias",
+        "noticias de hoy","en internet","en la web","precio actual",
+        "hoy ","ahora mismo","actualmente"
+    ])
+
+    results=[]
+    if need_search:
+        results=web_search(msg)
+
+    mem="\n".join("- "+x for x in memories())
+    context=""
+    if results:
+        context="\nRESULTADOS DE INTERNET:\n"+json.dumps(results,ensure_ascii=False)
+    prompt=f"""Eres J.A.R.V.I.S., un asistente personal inteligente.
+Responde en español, de forma natural, clara y útil.
+No inventes información.
+Si se proporcionaron resultados de internet, úsalos y deja claro que son resultados encontrados en la web.
+Memoria del usuario:
+{mem or "Sin memoria todavía."}
+{context}
+"""
+
+    try:
+        r=client.responses.create(
+            model="openrouter/free",
+            input=prompt+"\nUsuario: "+msg
+        )
+        reply=getattr(r,"output_text",None)
+        if not reply:
+            reply=str(r)
+    except Exception as e:
+        reply="He tenido un problema al conectar con mi cerebro: "+str(e)
+
+    return jsonify({"reply":reply,"web":results})
+
+@app.route("/")
+def home():
+    return Response("""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#05080e">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg">
+<title>J.A.R.V.I.S.</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0a0e17;color:#bffaff;font-family:Arial,sans-serif}
+body{display:flex;align-items:center;justify-content:center}
+.hud{position:relative;width:min(100vw,520px);height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden;background:radial-gradient(circle,#062431 0,#0a0e17 48%,#03060b 100%)}
+.ring{position:absolute;border:1px solid #22d3ee;border-radius:50%;box-shadow:0 0 15px #22d3ee55,inset 0 0 15px #22d3ee22}
+.r1{width:330px;height:330px;animation:spin 13s linear infinite}
+.r2{width:270px;height:270px;border-style:dashed;animation:spin 8s linear infinite reverse}
+.r3{width:410px;height:410px;border-color:#22d3ee55;animation:spin 22s linear infinite}
+.r4{width:190px;height:190px;border-width:2px;animation:pulse 2s ease-in-out infinite}
+.center{position:relative;width:120px;height:120px;border-radius:50%;border:3px solid #22d3ee;background:#07151f;box-shadow:0 0 25px #22d3ee,0 0 70px #22d3ee55;display:flex;align-items:center;justify-content:center;font-size:50px;z-index:4;animation:pulse 2s ease-in-out infinite}
+.mic{position:absolute;bottom:24px;width:74px;height:74px;border-radius:50%;border:2px solid #22d3ee;background:#07151f;color:#bffaff;font-size:32px;box-shadow:0 0 22px #22d3ee88;z-index:10}
+.status{position:absolute;bottom:108px;text-align:center;font-size:13px;letter-spacing:4px;color:#22d3ee;text-shadow:0 0 10px #22d3ee}
+.eq{position:absolute;bottom:150px;display:flex;gap:4px;height:35px;align-items:end}
+.eq i{display:block;width:4px;background:#22d3ee;box-shadow:0 0 8px #22d3ee;height:8px}
+.log{position:absolute;top:25px;left:18px;right:18px;max-height:105px;overflow:hidden;font-size:12px;color:#8deffc;opacity:.75}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{transform:scale(.96);opacity:.85}50%{transform:scale(1.04);opacity:1}}
+.listening .r1{animation-duration:4s}
+.listening .r2{animation-duration:2.5s}
+.listening .r3{animation-duration:7s}
+.listening .r4{animation-duration:.8s}
+</style>
+</head>
+<body>
+<div class="hud" id="hud">
+<div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div><div class="ring r4"></div>
+<div class="center">J</div>
+<div class="eq" id="eq"></div>
+<div class="status" id="status">AWAITING COMMAND...</div>
+<button class="mic" id="mic">🎙</button>
+<div class="log" id="log"></div>
+</div>
+
+<script>
+const hud=document.getElementById("hud"),mic=document.getElementById("mic"),status=document.getElementById("status"),log=document.getElementById("log"),eq=document.getElementById("eq");
+
+for(let i=0;i<18;i++){let x=document.createElement("i");eq.appendChild(x)}
+
+function equalizer(){
+ [...eq.children].forEach(x=>x.style.height=(hud.classList.contains("listening")?(8+Math.random()*28):(4+Math.random()*10))+"px");
+}
+setInterval(equalizer,120);
+
+function say(t){
+ if(!("speechSynthesis" in window))return;
+ speechSynthesis.cancel();
+ let u=new SpeechSynthesisUtterance(t);
+ u.lang="es-PA";u.rate=.95;u.pitch=1;
+ let vs=speechSynthesis.getVoices();
+ let v=vs.find(x=>x.lang&&x.lang.toLowerCase().startsWith("es"));
+ if(v)u.voice=v;
+ speechSynthesis.speak(u);
+}
+
+async function ask(t){
+ log.innerHTML+="<div>USER: "+t+"</div>";
+ status.textContent="THINKING...";
+ try{
+  let r=await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:t})});
+  let d=await r.json();
+  log.innerHTML+="<div>JARVIS: "+d.reply+"</div>";
+  say(d.reply);
+ }catch(e){log.innerHTML+="<div>ERROR DE CONEXIÓN</div>"}
+ status.textContent="AWAITING COMMAND...";
+}
+
+let rec=null;
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+
+if(SR){
+ rec=new SR();
+ rec.lang="es-PA";
+ rec.continuous=false;
+ rec.interimResults=false;
+ rec.onstart=()=>{hud.classList.add("listening");status.textContent="LISTENING..."}
+ rec.onend=()=>{hud.classList.remove("listening");if(status.textContent==="LISTENING...")status.textContent="AWAITING COMMAND..."}
+ rec.onresult=e=>{let t=e.results[0][0].transcript;ask(t)}
+}else{
+ status.textContent="MICROPHONE NO DISPONIBLE";
+}
+
+mic.onclick=()=>{
+ if(rec){
+  try{rec.start()}catch(e){}
+ }else{
+  let t=prompt("Escribe tu comando para JARVIS:");
+  if(t)ask(t);
+ }
+};
+
+if("serviceWorker" in navigator)navigator.serviceWorker.register("/service-worker.js");
+</script>
+</body>
+</html>""",mimetype="text/html")
+
+if __name__=="__main__":
+    app.run(host="0.0.0.0",port=int(os.environ.get("PORT",8000)))
